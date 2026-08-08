@@ -22,7 +22,10 @@ sonic_mujoco = [
   "assets/mujoco/robots/g1/*.xml",
   "assets/mujoco/robots/g1/*.md",
   "assets/mujoco/robots/g1/meshes/*.STL",
+  "assets/mujoco/meshes/*.obj",
   "assets/mujoco/scenes/g1/*.xml",
+  "assets/mujoco/textures/*.md",
+  "assets/mujoco/textures/*.png",
   "assets/pico/*.md",
   "assets/pico/*.npz",
 ]

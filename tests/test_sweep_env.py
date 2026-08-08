@@ -16,10 +16,14 @@ class SweepEnvTest(unittest.TestCase):
 
     def test_scene_contains_table_target_and_free_objects(self) -> None:
         table = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_BODY, "table")
+        divider = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_GEOM, "divider_tape"
+        )
         target = mujoco.mj_name2id(
             self.env.model, mujoco.mjtObj.mjOBJ_SITE, "sweep_target"
         )
         self.assertGreaterEqual(table, 0)
+        self.assertGreaterEqual(divider, 0)
         self.assertGreaterEqual(target, 0)
         for name in OBJECT_NAMES:
             joint = mujoco.mj_name2id(
@@ -29,6 +33,7 @@ class SweepEnvTest(unittest.TestCase):
         half_size = self.env.model.site_size[target]
         self.assertGreater(half_size[0], half_size[1])
         self.assertGreater(self.env.model.site_pos[target, 1], 0.0)
+        self.assertEqual(len(OBJECT_NAMES), 5)
 
     def test_seeded_reset_is_reproducible(self) -> None:
         self.env.reset(seed=7)
@@ -40,6 +45,7 @@ class SweepEnvTest(unittest.TestCase):
 
         np.testing.assert_array_equal(first, second)
         self.assertFalse(np.array_equal(first, third))
+        self.assertTrue(np.all(first[:, 1] < 0.0))
         self.assertFalse(self.env.is_success())
 
     def test_success_when_all_objects_are_in_target(self) -> None:
@@ -48,13 +54,14 @@ class SweepEnvTest(unittest.TestCase):
             self.env.model, mujoco.mjtObj.mjOBJ_SITE, "sweep_target"
         )
         center = self.env.data.site_xpos[site_id]
-        for index, name in enumerate(OBJECT_NAMES):
+        x_offsets = np.linspace(-0.24, 0.24, len(OBJECT_NAMES))
+        for offset, name in zip(x_offsets, OBJECT_NAMES):
             joint_id = mujoco.mj_name2id(
                 self.env.model, mujoco.mjtObj.mjOBJ_JOINT, f"{name}_joint"
             )
             address = self.env.model.jnt_qposadr[joint_id]
             self.env.data.qpos[address : address + 3] = center + [
-                0.12 * (index - 1),
+                offset,
                 0.0,
                 0.024,
             ]

@@ -98,8 +98,8 @@ MUJOCO_GL=egl .venv/bin/python scripts/run_pico_teleop.py --scene sweep --headle
 
 ## Sweep 场景
 
-Sweep 桌面由中间的竖向边界分成左右两侧。三个物体出生在一侧，绿色目标区位于
-另一侧；将三个物体全部扫过中线后，终端显示 `Sweep task completed.`。
+Sweep 桌面按真机布置由蓝色胶带分成左右两侧。杯子、齿轮、白卡、纸板和小鸭
+出生在同一侧；将五个物体全部扫过中线后，终端显示 `Sweep task completed.`。
 `env.reset(seed=7)` 可得到可复现的初始位置。
 
 ## 代码边界
