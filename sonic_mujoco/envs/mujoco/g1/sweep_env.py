@@ -9,7 +9,7 @@ from .g1_env import MujocoG1Env
 
 OBJECT_NAMES = ("sweep_object_0", "sweep_object_1", "sweep_object_2")
 SPAWN_POSITIONS = np.array(
-    [[0.62, -0.28, 0.79], [0.85, -0.28, 0.79], [1.08, -0.28, 0.79]]
+    [[0.62, -0.28, 0.79], [0.90, -0.28, 0.79], [0.76, -0.28, 0.79]]
 )
 
 

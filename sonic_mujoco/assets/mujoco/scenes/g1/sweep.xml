@@ -36,11 +36,11 @@
       <freejoint name="sweep_object_0_joint"/>
       <geom class="sweep_object" material="object_red"/>
     </body>
-    <body name="sweep_object_1" pos="0.85 -0.28 0.79">
+    <body name="sweep_object_1" pos="0.90 -0.28 0.79">
       <freejoint name="sweep_object_1_joint"/>
       <geom class="sweep_object" material="object_blue"/>
     </body>
-    <body name="sweep_object_2" pos="1.08 -0.28 0.79">
+    <body name="sweep_object_2" pos="0.76 -0.28 0.79">
       <freejoint name="sweep_object_2_joint"/>
       <geom class="sweep_object" material="object_yellow"/>
     </body>
