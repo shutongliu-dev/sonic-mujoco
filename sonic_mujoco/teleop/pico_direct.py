@@ -26,6 +26,27 @@ class _PoseFrame:
     root_quaternion: np.ndarray
 
 
+@dataclass(frozen=True, slots=True)
+class PicoControls:
+    a: bool = False
+    b: bool = False
+    x: bool = False
+    y: bool = False
+    menu: bool = False
+    left_trigger: float = 0.0
+    right_trigger: float = 0.0
+    left_grip: float = 0.0
+    right_grip: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class PicoEvents:
+    start_stop: bool = False
+    toggle_pose: bool = False
+    toggle_recording: bool = False
+    abort_recording: bool = False
+
+
 def _lerp_quaternion(left: np.ndarray, right: np.ndarray, alpha: float) -> np.ndarray:
     if np.dot(left, right) < 0.0:
         right = -right
@@ -159,8 +180,12 @@ class PicoTeleop(TeleopBase):
         self._previous: tuple[int, _PoseFrame] | None = None
         self._next_target_ns: int | None = None
         self._frame_index = 0
+        self.controls = PicoControls()
+        self._events = PicoEvents()
+        self._previous_combos = (False, False, False, False)
 
     def read(self) -> TeleopCommand | None:
+        self._update_controls()
         if not self._sdk.is_body_data_available():
             return None
         timestamp = int(self._sdk.get_time_stamp_ns())
@@ -201,6 +226,53 @@ class PicoTeleop(TeleopBase):
             joint_position=np.stack([_wrist_joints(item[1].pose) for item in self._frames]),
             heading_increment=heading,
         )
+
+    def pop_events(self) -> PicoEvents:
+        events = self._events
+        self._events = PicoEvents()
+        return events
+
+    def _update_controls(self) -> None:
+        controls = PicoControls(
+            a=bool(self._call("get_A_button", False)),
+            b=bool(self._call("get_B_button", False)),
+            x=bool(self._call("get_X_button", False)),
+            y=bool(self._call("get_Y_button", False)),
+            menu=bool(self._call("get_left_menu_button", False)),
+            left_trigger=float(self._call("get_left_trigger", 0.0)),
+            right_trigger=float(self._call("get_right_trigger", 0.0)),
+            left_grip=float(self._call("get_left_grip", 0.0)),
+            right_grip=float(self._call("get_right_grip", 0.0)),
+        )
+        start_stop = controls.a and controls.b and controls.x and controls.y
+        combos = (
+            start_stop,
+            controls.a and controls.x,
+            controls.a and controls.left_grip > 0.5,
+            controls.b and controls.left_grip > 0.5,
+        )
+        rising = tuple(
+            current and not previous
+            for current, previous in zip(combos, self._previous_combos)
+        )
+        self.controls = controls
+        self._events = PicoEvents(
+            start_stop=self._events.start_stop or rising[0],
+            toggle_pose=self._events.toggle_pose or (rising[1] and not start_stop),
+            toggle_recording=(
+                self._events.toggle_recording or (rising[2] and not start_stop)
+            ),
+            abort_recording=(
+                self._events.abort_recording or (rising[3] and not start_stop)
+            ),
+        )
+        self._previous_combos = combos
+
+    def _call(self, name: str, default):
+        try:
+            return getattr(self._sdk, name)()
+        except Exception:
+            return default
 
     def _controller_axes(self) -> tuple[float, float, float, float]:
         try:

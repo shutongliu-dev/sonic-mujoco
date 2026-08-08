@@ -15,6 +15,8 @@ class FakeSdk:
     def __init__(self) -> None:
         self.timestamp = 0
         self.closed = False
+        self.buttons = {name: False for name in "ABXY"}
+        self.left_grip = 0.0
 
     def init(self) -> None:
         pass
@@ -37,6 +39,21 @@ class FakeSdk:
 
     def get_right_axis(self) -> tuple[float, float]:
         return 0.5, 0.0
+
+    def get_A_button(self) -> bool:
+        return self.buttons["A"]
+
+    def get_B_button(self) -> bool:
+        return self.buttons["B"]
+
+    def get_X_button(self) -> bool:
+        return self.buttons["X"]
+
+    def get_Y_button(self) -> bool:
+        return self.buttons["Y"]
+
+    def get_left_grip(self) -> float:
+        return self.left_grip
 
 
 class PicoDirectTest(unittest.TestCase):
@@ -64,6 +81,40 @@ class PicoDirectTest(unittest.TestCase):
         self.assertAlmostEqual(command.heading_increment, -0.015)
         teleop.close()
         self.assertTrue(sdk.closed)
+
+    def test_button_combinations_are_edge_triggered(self) -> None:
+        sdk = FakeSdk()
+        teleop = PicoTeleop(sdk, start_service=False)
+
+        sdk.buttons.update(A=True, B=True, X=True, Y=True)
+        teleop.read()
+        events = teleop.pop_events()
+        self.assertTrue(events.start_stop)
+        self.assertFalse(events.toggle_pose)
+
+        teleop.read()
+        self.assertFalse(teleop.pop_events().start_stop)
+        sdk.buttons.update(B=False, Y=False)
+        teleop.read()
+        self.assertFalse(teleop.pop_events().toggle_pose)
+        sdk.buttons.update(A=False, X=False)
+        teleop.read()
+        sdk.buttons.update(A=True, X=True)
+        teleop.read()
+        self.assertTrue(teleop.pop_events().toggle_pose)
+
+        sdk.buttons.update(A=False, X=False)
+        teleop.read()
+        sdk.left_grip = 1.0
+        sdk.buttons["A"] = True
+        teleop.read()
+        self.assertTrue(teleop.pop_events().toggle_recording)
+
+        sdk.buttons["A"] = False
+        teleop.read()
+        sdk.buttons["B"] = True
+        teleop.read()
+        self.assertTrue(teleop.pop_events().abort_recording)
 
 
 if __name__ == "__main__":
