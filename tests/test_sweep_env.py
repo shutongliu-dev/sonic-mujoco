@@ -26,6 +26,9 @@ class SweepEnvTest(unittest.TestCase):
                 self.env.model, mujoco.mjtObj.mjOBJ_JOINT, f"{name}_joint"
             )
             self.assertEqual(self.env.model.jnt_type[joint], mujoco.mjtJoint.mjJNT_FREE)
+        half_size = self.env.model.site_size[target]
+        self.assertGreater(half_size[0], half_size[1])
+        self.assertGreater(self.env.model.site_pos[target, 1], 0.0)
 
     def test_seeded_reset_is_reproducible(self) -> None:
         self.env.reset(seed=7)
@@ -51,8 +54,8 @@ class SweepEnvTest(unittest.TestCase):
             )
             address = self.env.model.jnt_qposadr[joint_id]
             self.env.data.qpos[address : address + 3] = center + [
-                0.0,
                 0.12 * (index - 1),
+                0.0,
                 0.024,
             ]
         mujoco.mj_forward(self.env.model, self.env.data)

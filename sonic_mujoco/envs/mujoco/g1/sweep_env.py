@@ -8,7 +8,9 @@ from numpy.typing import NDArray
 from .g1_env import MujocoG1Env
 
 OBJECT_NAMES = ("sweep_object_0", "sweep_object_1", "sweep_object_2")
-SPAWN_POSITIONS = np.array([[0.72, -0.24, 0.79], [0.72, 0.0, 0.79], [0.72, 0.24, 0.79]])
+SPAWN_POSITIONS = np.array(
+    [[0.62, -0.28, 0.79], [0.85, -0.28, 0.79], [1.08, -0.28, 0.79]]
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +21,7 @@ class SweepState:
 
 
 class MujocoG1SweepEnv(MujocoG1Env):
-    """G1 at a table with three objects to sweep into a target region."""
+    """G1 sweeps three objects across the table's left-right center line."""
 
     def __init__(self, timestep: float = 0.005) -> None:
         package_root = Path(__file__).resolve().parents[3]
@@ -38,8 +40,8 @@ class MujocoG1SweepEnv(MujocoG1Env):
         super().reset()
         rng = np.random.default_rng(seed)
         positions = SPAWN_POSITIONS.copy()
-        positions[:, 0] += rng.uniform(-0.05, 0.05, len(OBJECT_NAMES))
-        positions[:, 1] += rng.uniform(-0.025, 0.025, len(OBJECT_NAMES))
+        positions[:, 0] += rng.uniform(-0.025, 0.025, len(OBJECT_NAMES))
+        positions[:, 1] += rng.uniform(-0.05, 0.05, len(OBJECT_NAMES))
         for address, position in zip(self._object_qpos_addresses, positions):
             self.data.qpos[address : address + 3] = position
             self.data.qpos[address + 3 : address + 7] = (1.0, 0.0, 0.0, 0.0)
