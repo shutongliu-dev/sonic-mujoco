@@ -1,7 +1,9 @@
 import argparse
 import time
 
-from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv
+import numpy as np
+
+from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv, RobotCommand
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,10 +17,18 @@ def main() -> None:
     args = parse_args()
     env = MujocoG1EmptyEnv()
     env.reset()
+    state = env.get_robot_state()
+    command = RobotCommand(
+        joint_position=state.joint_position,
+        joint_velocity=np.zeros(29),
+        feedforward_torque=np.zeros(29),
+        kp=np.full(29, 20.0),
+        kd=np.full(29, 1.0),
+    )
 
     try:
         if args.headless:
-            env.step(args.steps or 1)
+            env.step(command, args.steps or 1)
             print(f"G1 simulation OK: time={env.time:.3f}s")
             return
 
@@ -26,7 +36,7 @@ def main() -> None:
         completed = 0
         while env.viewer_running and (args.steps == 0 or completed < args.steps):
             started = time.monotonic()
-            env.step()
+            env.step(command)
             env.render()
             completed += 1
             time.sleep(max(0.0, env.timestep - (time.monotonic() - started)))

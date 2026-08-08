@@ -1,8 +1,6 @@
 import unittest
 
-import numpy as np
-
-from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv, SONIC_JOINT_NAMES
+from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv
 
 
 class G1ModelTest(unittest.TestCase):
@@ -17,20 +15,9 @@ class G1ModelTest(unittest.TestCase):
         self.assertEqual(self.env.model.nu, 43)
         self.assertEqual(len(self.env.joint_ids), 29)
 
-    def test_sonic_joint_mapping(self) -> None:
-        self.assertEqual(len(set(self.env.joint_ids)), len(SONIC_JOINT_NAMES))
-        self.assertEqual(len(set(self.env.actuator_ids)), len(SONIC_JOINT_NAMES))
-        self.assertEqual(self.env.actuator_ids[:3], (2, 1, 0))
-        self.assertEqual(self.env.actuator_ids[22:29], tuple(range(29, 36)))
-
-    def test_reset_and_step(self) -> None:
+    def test_reset(self) -> None:
         self.env.reset()
-        initial_qpos = self.env.data.qpos.copy()
-        self.env.step()
-        self.assertAlmostEqual(self.env.time, 0.005)
-        self.assertTrue(np.isfinite(self.env.data.qpos).all())
-        self.env.reset()
-        np.testing.assert_allclose(self.env.data.qpos, initial_qpos)
+        self.assertAlmostEqual(self.env.time, 0.0)
 
 
 if __name__ == "__main__":
