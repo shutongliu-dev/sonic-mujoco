@@ -6,17 +6,16 @@ import numpy as np
 from ..env_base import MujocoEnvBase
 from .interface import RobotCommand, RobotState
 
-
 SONIC_JOINT_NAMES = (
-    "left_hip_yaw_joint",
-    "left_hip_roll_joint",
     "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
     "left_knee_joint",
     "left_ankle_pitch_joint",
     "left_ankle_roll_joint",
-    "right_hip_yaw_joint",
-    "right_hip_roll_joint",
     "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
     "right_knee_joint",
     "right_ankle_pitch_joint",
     "right_ankle_roll_joint",
@@ -41,7 +40,7 @@ SONIC_JOINT_NAMES = (
 
 
 class MujocoG1Env(MujocoEnvBase):
-    """MuJoCo environment with validated SONIC G1 joint semantics."""
+    """MuJoCo environment using the G1 hardware joint order."""
 
     def __init__(self, xml_path: str | Path, timestep: float = 0.005) -> None:
         super().__init__(xml_path, timestep)
@@ -53,7 +52,9 @@ class MujocoG1Env(MujocoEnvBase):
         self._actuator_indices = np.asarray(self.actuator_ids)
         self._qpos_indices = self.model.jnt_qposadr[np.asarray(self.joint_ids)]
         self._dof_indices = self.model.jnt_dofadr[np.asarray(self.joint_ids)]
-        self._control_range = self.model.actuator_ctrlrange[self._actuator_indices].copy()
+        self._control_range = self.model.actuator_ctrlrange[
+            self._actuator_indices
+        ].copy()
         self._imu_quaternion = self._sensor_slice("imu_quat")
         self._imu_angular_velocity = self._sensor_slice("imu_gyro")
         self._imu_linear_acceleration = self._sensor_slice("imu_acc")
@@ -75,7 +76,9 @@ class MujocoG1Env(MujocoEnvBase):
             joint_velocity=self.data.qvel[self._dof_indices].copy(),
             joint_effort=self.data.actuator_force[self._actuator_indices].copy(),
             imu_quaternion=self.data.sensordata[self._imu_quaternion].copy(),
-            imu_angular_velocity=self.data.sensordata[self._imu_angular_velocity].copy(),
+            imu_angular_velocity=self.data.sensordata[
+                self._imu_angular_velocity
+            ].copy(),
             imu_linear_acceleration=self.data.sensordata[
                 self._imu_linear_acceleration
             ].copy(),
@@ -92,7 +95,9 @@ class MujocoG1Env(MujocoEnvBase):
                 + command.kp * (command.joint_position - state.joint_position)
                 + command.kd * (command.joint_velocity - state.joint_velocity)
             )
-            torque = np.clip(torque, self._control_range[:, 0], self._control_range[:, 1])
+            torque = np.clip(
+                torque, self._control_range[:, 0], self._control_range[:, 1]
+            )
             self.data.ctrl[:] = 0.0
             self.data.ctrl[self._actuator_indices] = torque
             mujoco.mj_step(self.model, self.data)

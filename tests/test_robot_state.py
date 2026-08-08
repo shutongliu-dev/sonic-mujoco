@@ -6,7 +6,7 @@ from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv
 
 
 class RobotStateTest(unittest.TestCase):
-    def test_state_uses_sonic_order_and_copies_data(self) -> None:
+    def test_state_uses_hardware_order_and_copies_data(self) -> None:
         env = MujocoG1EmptyEnv()
         self.addCleanup(env.close)
         env.reset()
