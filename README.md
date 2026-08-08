@@ -50,6 +50,23 @@ DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/gdm/Xauthority \
 `PICO stream received; SONIC control is running.`，G1 将跟随人体姿态。当前这条路径只接入
 SONIC 的 SMPL 姿态模式；planner 导航和手指执行器暂未接入。
 
+## Sweep 场景
+
+```bash
+DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/gdm/Xauthority \
+  .venv/bin/python scripts/run_pico_teleop.py --scene sweep
+```
+
+场景包含一张桌子、三个可移动物体和桌面上的绿色目标区。将三个物体全部扫入目标区后，
+终端会显示 `Sweep task completed.`。
+
+```python
+state = env.get_scene_state()
+print(state.object_position, state.object_quaternion, state.success)
+```
+
+`env.reset(seed=7)` 可以得到可复现的物体初始位置。
+
 ## 数据边界
 
 - `envs/mujoco`：MuJoCo 生命周期、G1 状态和 PD 控制。
@@ -57,6 +74,7 @@ SONIC 的 SMPL 姿态模式；planner 导航和手指执行器暂未接入。
 - `teleop/PicoTeleop`：只负责读取和校验旧 PICO v3 消息。
 - `controllers/sonic/encoder.py`：10 帧滑动窗口和 1762 维 encoder 输入。
 - `controllers/sonic/controller.py`：994 维 decoder 输入和动作映射。
+- `envs/mujoco/g1/sweep_env.py`：Sweep reset、场景状态和成功条件。
 
 四元数统一使用 `wxyz`。`RobotState` 和 `RobotCommand` 使用旧仿真 `lowstate`
 的 hardware/MuJoCo joint order；SONIC 内部显式转换到 IsaacLab order。

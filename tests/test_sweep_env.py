@@ -1,0 +1,65 @@
+import unittest
+
+import mujoco
+import numpy as np
+
+from sonic_mujoco.envs.mujoco.g1 import MujocoG1SweepEnv
+from sonic_mujoco.envs.mujoco.g1.sweep_env import OBJECT_NAMES
+
+
+class SweepEnvTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.env = MujocoG1SweepEnv()
+
+    def tearDown(self) -> None:
+        self.env.close()
+
+    def test_scene_contains_table_target_and_free_objects(self) -> None:
+        table = mujoco.mj_name2id(self.env.model, mujoco.mjtObj.mjOBJ_BODY, "table")
+        target = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_SITE, "sweep_target"
+        )
+        self.assertGreaterEqual(table, 0)
+        self.assertGreaterEqual(target, 0)
+        for name in OBJECT_NAMES:
+            joint = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_JOINT, f"{name}_joint"
+            )
+            self.assertEqual(self.env.model.jnt_type[joint], mujoco.mjtJoint.mjJNT_FREE)
+
+    def test_seeded_reset_is_reproducible(self) -> None:
+        self.env.reset(seed=7)
+        first = self.env.get_scene_state().object_position
+        self.env.reset(seed=7)
+        second = self.env.get_scene_state().object_position
+        self.env.reset(seed=8)
+        third = self.env.get_scene_state().object_position
+
+        np.testing.assert_array_equal(first, second)
+        self.assertFalse(np.array_equal(first, third))
+        self.assertFalse(self.env.is_success())
+
+    def test_success_when_all_objects_are_in_target(self) -> None:
+        self.env.reset(seed=0)
+        site_id = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_SITE, "sweep_target"
+        )
+        center = self.env.data.site_xpos[site_id]
+        for index, name in enumerate(OBJECT_NAMES):
+            joint_id = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_JOINT, f"{name}_joint"
+            )
+            address = self.env.model.jnt_qposadr[joint_id]
+            self.env.data.qpos[address : address + 3] = center + [
+                0.0,
+                0.12 * (index - 1),
+                0.024,
+            ]
+        mujoco.mj_forward(self.env.model, self.env.data)
+
+        self.assertTrue(self.env.is_success())
+        self.assertTrue(self.env.get_scene_state().success)
+
+
+if __name__ == "__main__":
+    unittest.main()

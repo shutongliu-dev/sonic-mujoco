@@ -1,0 +1,48 @@
+<mujoco model="g1_sweep">
+  <include file="common.xml"/>
+  <include file="../../robots/g1/g1_29dof_with_hand.xml"/>
+
+  <asset>
+    <material name="table" rgba="0.48 0.30 0.16 1"/>
+    <material name="target" rgba="0.2 0.75 0.3 0.25"/>
+    <material name="object_red" rgba="0.85 0.15 0.12 1"/>
+    <material name="object_blue" rgba="0.12 0.35 0.85 1"/>
+    <material name="object_yellow" rgba="0.95 0.70 0.08 1"/>
+  </asset>
+
+  <default>
+    <default class="sweep_object">
+      <joint damping="0.01"/>
+      <geom type="cylinder" size="0.045 0.025" mass="0.12" friction="0.8 0.02 0.002"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0.6 0 1.8" dir="0 0 -1" directional="true"/>
+    <geom name="floor" size="0 0 0.05" type="plane" material="groundplane"/>
+
+    <body name="table" pos="0.85 0 0.72">
+      <geom name="table_top" type="box" size="0.45 0.60 0.04" material="table"/>
+      <geom type="box" pos="-0.36 -0.51 -0.36" size="0.04 0.04 0.36" material="table"/>
+      <geom type="box" pos="-0.36 0.51 -0.36" size="0.04 0.04 0.36" material="table"/>
+      <geom type="box" pos="0.36 -0.51 -0.36" size="0.04 0.04 0.36" material="table"/>
+      <geom type="box" pos="0.36 0.51 -0.36" size="0.04 0.04 0.36" material="table"/>
+    </body>
+
+    <site name="sweep_target" type="box" pos="1.12 0 0.761" size="0.13 0.48 0.002"
+      material="target"/>
+
+    <body name="sweep_object_0" pos="0.72 -0.24 0.79">
+      <freejoint name="sweep_object_0_joint"/>
+      <geom class="sweep_object" material="object_red"/>
+    </body>
+    <body name="sweep_object_1" pos="0.72 0 0.79">
+      <freejoint name="sweep_object_1_joint"/>
+      <geom class="sweep_object" material="object_blue"/>
+    </body>
+    <body name="sweep_object_2" pos="0.72 0.24 0.79">
+      <freejoint name="sweep_object_2_joint"/>
+      <geom class="sweep_object" material="object_yellow"/>
+    </body>
+  </worldbody>
+</mujoco>

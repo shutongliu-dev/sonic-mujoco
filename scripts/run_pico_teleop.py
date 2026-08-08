@@ -3,7 +3,7 @@ import time
 from pathlib import Path
 
 from sonic_mujoco.controllers.sonic import SonicController, SonicEncoder
-from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv
+from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv, MujocoG1SweepEnv
 from sonic_mujoco.teleop import PicoTeleop
 
 REFERENCE_POLICY = Path(
@@ -24,6 +24,7 @@ def parse_args() -> argparse.Namespace:
         default=REFERENCE_POLICY / "model_decoder.onnx",
     )
     parser.add_argument("--endpoint", default="tcp://127.0.0.1:5556")
+    parser.add_argument("--scene", choices=("empty", "sweep"), default="empty")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--steps", type=int, default=0)
     return parser.parse_args()
@@ -31,7 +32,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    env = MujocoG1EmptyEnv()
+    env = MujocoG1SweepEnv() if args.scene == "sweep" else MujocoG1EmptyEnv()
     encoder = SonicEncoder.from_onnx(args.encoder)
     controller = SonicController.from_onnx(args.decoder)
     teleop = PicoTeleop(args.endpoint)
@@ -40,6 +41,7 @@ def main() -> None:
 
     completed = 0
     started = False
+    task_completed = False
     try:
         if not args.headless:
             env.render()
@@ -60,6 +62,13 @@ def main() -> None:
             robot_command = controller.act(env.get_robot_state(), token)
             env.step(robot_command, steps=controller.steps_per_action)
             completed += 1
+            if (
+                not task_completed
+                and isinstance(env, MujocoG1SweepEnv)
+                and env.is_success()
+            ):
+                print("Sweep task completed.")
+                task_completed = True
 
             if not args.headless:
                 if not env.viewer_running:
