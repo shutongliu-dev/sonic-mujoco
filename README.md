@@ -8,7 +8,7 @@ Sweep 场景。实现保持单进程控制主循环，不引入额外框架。
 
 ```bash
 cd ~/lst/sonic-mujoco
-~/.local/bin/uv sync --extra sonic --extra teleop
+~/.local/bin/uv sync --extra sonic --extra teleop --extra recording
 .venv/bin/python scripts/setup_xrobotoolkit.py
 ```
 
@@ -55,9 +55,29 @@ DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/gdm/Xauthority \
 直接成为 G1 的参考动作。启动后先按 `A+B+X+Y` 进入待机，再按 `A+X` 开始
 全身遥操。
 
-录制结果默认保存到 `records/episode_*.npz`，可通过 `--record-dir` 修改目录。
-每个控制帧包含完整 MuJoCo `qpos/qvel/ctrl`、PICO SMPL 参考、根四元数、SONIC
-token、策略动作和手柄输入；Sweep 物体状态包含在完整 `qpos` 中。
+录制结果默认保存到 `records/<采集时间>/`，可通过 `--record-dir` 修改根目录。
+目录格式与真机采集一致：`meta/` 保存 schema 和 episode 索引，`data/chunk-000/`
+保存 Parquet，`videos/chunk-000/observation.images.ego_view/` 保存第一视角 MP4。
+每个控制帧包含完整 MuJoCo `qpos/qvel/ctrl`、PICO SMPL 参考、SONIC token、策略
+动作和手柄输入；Sweep 物体状态包含在完整 `qpos` 中。
+
+MuJoCo 接触不是模拟 JuQiao 通道，而是在每个物理子步读取 G1 与场景的接触，
+再汇总到 50 Hz 控制帧。数据字段 `observation.contact.*` 包含机器人部位、被接触
+物体、世界坐标、最大法向/切向力、累计法向冲量和采样次数。每帧按冲量保留最
+重要的 16 组部位—物体接触；body ID 对应名称保存在 `meta/info.json`。
+
+每条 episode 结束后还会生成：
+
+- `previews/episode_XXXXXX.html`：视频、曲线和主要接触部位汇总，直接打开即可；
+- `previews/episode_XXXXXX_contact.svg`：接触力曲线和接触帧时间轴，可直接打开；
+- `previews/episode_XXXXXX_contact.json`：最大力、累计冲量和主要接触部位摘要；
+- `videos/.../episode_XXXXXX.mp4`：与 Parquet 同帧数的机器人第一视角录像。
+
+Parquet 保留包括脚—地面在内的全部机器人—场景接触；预览会排除 `world` 地面
+支撑力，以免站立重量掩盖手臂、桌面和任务物体的接触曲线。
+
+只调试数值、不需要落盘视频时可加 `--no-record-video`。该参数不影响 PICO 里的
+实时画面；`--no-pico-video` 与数据集视频也是两个独立开关。
 
 只在头显里看画面、不显示 Ubuntu viewer：
 

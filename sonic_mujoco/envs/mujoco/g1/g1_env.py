@@ -3,6 +3,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
+from ....contact import ContactRecorder
 from ..env_base import MujocoEnvBase
 from .interface import RobotCommand, RobotState
 
@@ -58,6 +59,7 @@ class MujocoG1Env(MujocoEnvBase):
         self._imu_quaternion = self._sensor_slice("imu_quat")
         self._imu_angular_velocity = self._sensor_slice("imu_gyro")
         self._imu_linear_acceleration = self._sensor_slice("imu_acc")
+        self.contacts = ContactRecorder(self.model)
 
         root_id = mujoco.mj_name2id(
             self.model, mujoco.mjtObj.mjOBJ_JOINT, "floating_base_joint"
@@ -88,6 +90,7 @@ class MujocoG1Env(MujocoEnvBase):
         if steps < 1:
             raise ValueError("steps must be positive")
 
+        self.contacts.begin()
         for _ in range(steps):
             state = self.get_robot_state()
             torque = (
@@ -101,6 +104,8 @@ class MujocoG1Env(MujocoEnvBase):
             self.data.ctrl[:] = 0.0
             self.data.ctrl[self._actuator_indices] = torque
             mujoco.mj_step(self.model, self.data)
+            self.contacts.update(self.data)
+        self.contacts.finish()
 
     def _joint_id(self, name: str) -> int:
         joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)

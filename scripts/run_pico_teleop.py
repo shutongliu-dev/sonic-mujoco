@@ -39,6 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-pico-video", action="store_true")
     parser.add_argument("--video-listen", default="0.0.0.0:13579")
     parser.add_argument("--record-dir", type=Path, default=Path("records"))
+    parser.add_argument("--no-record-video", action="store_true")
+    parser.add_argument("--task")
     parser.add_argument("--scene", choices=("empty", "sweep"), default="empty")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--steps", type=int, default=0)
@@ -57,7 +59,17 @@ def main() -> None:
         video = PicoVideo(env.model, env.data, listen=args.video_listen)
     env.reset()
     mode = TeleopMode.OFF if direct else TeleopMode.POSE
-    recorder = EpisodeRecorder(args.record_dir, args.scene)
+    control_fps = round(1.0 / (env.timestep * controller.steps_per_action))
+    recorder = EpisodeRecorder(
+        args.record_dir,
+        args.scene,
+        model=env.model,
+        data=env.data,
+        body_names=env.contacts.body_names,
+        fps=control_fps,
+        task=args.task,
+        record_video=not args.no_record_video,
+    )
     latest_command = None
     if args.endpoint:
         print(f"Waiting for legacy PICO pose messages on {args.endpoint} ...")
@@ -114,7 +126,9 @@ def main() -> None:
                     env.step(robot_command, steps=controller.steps_per_action)
                     completed += 1
                     if not started:
-                        print("PICO stream received; full-body teleoperation is running.")
+                        print(
+                            "PICO stream received; full-body teleoperation is running."
+                        )
                         started = True
                     if recorder.active and latest_command is not None:
                         recorder.append(
@@ -126,6 +140,7 @@ def main() -> None:
                             token=token,
                             action=controller.last_action,
                             controls=controls,
+                            contacts=env.contacts.last_frame,
                         )
             if (
                 not task_completed
@@ -171,6 +186,7 @@ def _finish_recording(recorder: EpisodeRecorder) -> None:
         print("Recording stopped without any control frames.")
     else:
         print(f"Recording saved to {path}.")
+        print(f"Contact preview saved to {recorder.last_preview}.")
 
 
 if __name__ == "__main__":
