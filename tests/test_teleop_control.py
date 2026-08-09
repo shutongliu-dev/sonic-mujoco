@@ -1,12 +1,12 @@
 import json
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
 
-from sonic_mujoco.contact import ContactFrame, MAX_CONTACTS
+from sonic_mujoco.contact import MAX_CONTACTS, ContactFrame
 from sonic_mujoco.recording import EpisodeRecorder
 from sonic_mujoco.teleop import (
     PicoControls,

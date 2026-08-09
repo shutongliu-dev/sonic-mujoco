@@ -1,9 +1,9 @@
 import argparse
-from dataclasses import dataclass
 import mmap
 import socket
 import struct
 import threading
+from dataclasses import dataclass
 
 FRAME_HEADER = struct.Struct("<4sIIII")
 
@@ -84,7 +84,8 @@ class VideoBridge:
 
         Gst.init(None)
         self.GLib, self.Gst = GLib, Gst
-        self._frame_file = open(frame_path, "rb")
+        # mmap remains valid only while its backing file stays open.
+        self._frame_file = open(frame_path, "rb")  # noqa: SIM115
         self._frames = mmap.mmap(self._frame_file.fileno(), 0, access=mmap.ACCESS_READ)
         self._listen = listen
         self._pipeline = None

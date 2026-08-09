@@ -21,8 +21,9 @@ from sonic_mujoco.teleop import (
     next_mode,
 )
 
-REFERENCE_POLICY = Path(
-    "/home/yons/lst/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+POLICY_DIR = Path(
+    os.environ.get("SONIC_POLICY_DIR", str(PROJECT_ROOT / "models"))
 )
 
 
@@ -31,22 +32,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--encoder",
         type=Path,
-        default=REFERENCE_POLICY / "model_encoder.onnx",
+        default=POLICY_DIR / "model_encoder.onnx",
     )
     parser.add_argument(
         "--decoder",
         type=Path,
-        default=REFERENCE_POLICY / "model_decoder.onnx",
+        default=POLICY_DIR / "model_decoder.onnx",
     )
     parser.add_argument(
         "--endpoint",
-        help="use the legacy GR00T PICO manager at this ZMQ endpoint",
+        help="read PICO poses from an external ZMQ endpoint",
     )
     parser.add_argument("--no-pico-video", action="store_true")
     parser.add_argument(
         "--pico-device",
         default=os.environ.get("SONIC_PICO_DEVICE"),
-        help="XRRobotKit device SN used for controller haptics",
+        help="XRRobotKit device name used for controller haptics",
     )
     parser.add_argument("--video-listen", default="0.0.0.0:13579")
     parser.add_argument("--record-dir", type=Path, default=Path("records"))
@@ -60,6 +61,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    for model in (args.encoder, args.decoder):
+        if not model.is_file():
+            raise SystemExit(f"SONIC model not found: {model}")
     env = MujocoG1SweepEnv() if args.scene == "sweep" else MujocoG1EmptyEnv()
     encoder = SonicEncoder.from_onnx(args.encoder)
     controller = SonicController.from_onnx(args.decoder)
@@ -91,7 +95,7 @@ def main() -> None:
     )
     latest_command = None
     if args.endpoint:
-        print(f"Waiting for legacy PICO pose messages on {args.endpoint} ...")
+        print(f"Waiting for PICO pose messages on {args.endpoint} ...")
     else:
         print("Waiting for PICO body tracking from XRRobotKit ...")
         print("Press A+B+X+Y to arm, then A+X to enter full-body POSE teleop.")
@@ -217,10 +221,13 @@ def main() -> None:
                     latest_action,
                     controls,
                 )
-            if haptics is not None and stepped:
-                if not haptics.update(env.contacts.last_frame, time.monotonic()):
-                    print("PICO haptics unavailable; disabling contact vibration.")
-                    haptics = None
+            if (
+                haptics is not None
+                and stepped
+                and not haptics.update(env.contacts.last_frame, time.monotonic())
+            ):
+                print("PICO haptics unavailable; disabling contact vibration.")
+                haptics = None
             if (
                 not task_completed
                 and isinstance(env, MujocoG1SweepEnv)

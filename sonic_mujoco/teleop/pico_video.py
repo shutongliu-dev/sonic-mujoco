@@ -1,9 +1,9 @@
 import mmap
 import os
-from pathlib import Path
 import struct
 import subprocess
 import time
+from pathlib import Path
 
 import mujoco
 import numpy as np

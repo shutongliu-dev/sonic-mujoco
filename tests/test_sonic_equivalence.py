@@ -1,27 +1,22 @@
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 import numpy as np
-
-from sonic_mujoco.controllers.sonic import OnnxPolicy, SonicObservationBuilder
 from test_sonic_action import REFERENCE_ACTION
 from test_sonic_observation import robot_state
 
+from sonic_mujoco.controllers.sonic import OnnxPolicy, SonicObservationBuilder
 
-REFERENCE_ROOT = Path(
-    os.environ.get(
-        "SONIC_REFERENCE_ROOT", "/home/yons/lst/GR00T-WholeBodyControl"
-    )
-)
+REFERENCE_ROOT = Path(os.environ.get("SONIC_REFERENCE_ROOT", "/nonexistent"))
 DEPLOY = REFERENCE_ROOT / "gear_sonic_deploy"
 MODEL = DEPLOY / "policy/release/model_decoder.onnx"
 INCLUDE = DEPLOY / "src/g1/g1_deploy_onnx_ref/include"
-CUDA = Path("/usr/local/cuda-13.0")
-TENSORRT = Path("/home/yons/TensorRT")
+CUDA = Path(os.environ.get("CUDA_ROOT", "/usr/local/cuda"))
+TENSORRT = Path(os.environ.get("TENSORRT_ROOT", "/nonexistent"))
 TRT_LIBRARY = DEPLOY / "build/src/TRTInference/libTRTInference.a"
 
 
@@ -30,7 +25,7 @@ class SonicEquivalenceTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         required = (MODEL, CUDA, TENSORRT, TRT_LIBRARY)
         if not all(path.exists() for path in required) or shutil.which("g++") is None:
-            raise unittest.SkipTest("GR00T C++ oracle is not available")
+            raise unittest.SkipTest("SONIC C++ reference is not available")
         source = Path(__file__).parent / "oracle/sonic_compat_oracle.cpp"
         cls._temporary = tempfile.TemporaryDirectory()
         cls.binary = Path(cls._temporary.name) / "sonic_compat_oracle"

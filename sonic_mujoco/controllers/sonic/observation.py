@@ -13,7 +13,6 @@ from .parameters import (
     TOKEN_DIM,
 )
 
-
 Array = NDArray[np.float64]
 
 

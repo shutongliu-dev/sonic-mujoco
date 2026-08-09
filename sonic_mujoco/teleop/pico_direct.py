@@ -1,11 +1,11 @@
-from collections import deque
 import ctypes
-from dataclasses import dataclass
 import importlib.util
 import json
 import os
-from pathlib import Path
 import subprocess
+from collections import deque
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -259,7 +259,7 @@ class PicoTeleop(TeleopBase):
             self._sdk.device_control_json(
                 device_id, json.dumps(command, separators=(",", ":"))
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
         return True
 
@@ -308,14 +308,14 @@ class PicoTeleop(TeleopBase):
     def _call(self, name: str, default):
         try:
             return getattr(self._sdk, name)()
-        except Exception:
+        except Exception:  # noqa: BLE001
             return default
 
     def _controller_axes(self) -> tuple[float, float, float, float]:
         try:
             left, right = self._sdk.get_left_axis(), self._sdk.get_right_axis()
             return float(left[0]), float(left[1]), float(right[0]), float(right[1])
-        except Exception:
+        except Exception:  # noqa: BLE001
             return 0.0, 0.0, 0.0, 0.0
 
     def close(self) -> None:
