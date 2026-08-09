@@ -6,6 +6,7 @@ import numpy as np
 from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv, RobotCommand
 
 
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the minimal G1 MuJoCo scene")
     parser.add_argument("--headless", action="store_true", help="do not open the viewer")
@@ -25,6 +26,8 @@ def main() -> None:
         kp=np.full(29, 20.0),
         kd=np.full(29, 1.0),
     )
+
+    print(command)
 
     try:
         if args.headless:
