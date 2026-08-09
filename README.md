@@ -50,16 +50,24 @@ DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/gdm/Xauthority \
 - 按住左菜单键：暂停动作跟随，松开后恢复；
 - 左 `grip+A`：开始或结束一段数据录制；
 - 左 `grip+B`：放弃当前录制。
+- 左 `grip+X`：重置场景、SONIC history 和 controller；若正在录制则放弃该条。
 
 这里不使用 locomotion Planner 或摇杆行走。人的迈步、转身、抬腿和手臂动作会
 直接成为 G1 的参考动作。启动后先按 `A+B+X+Y` 进入待机，再按 `A+X` 开始
 全身遥操。
+
+录制过程中仍可用 `A+X` 暂停 G1 跟随，再次按下后恢复，当前 episode 不会结束。
+暂停期间会继续记录 G1 保持动作与变化中的 PICO 参考，因此不建议在正式数据中
+间暂停。头显左上角会显示红色 `REC` 和当前录制时长。
 
 录制结果默认保存到 `records/<采集时间>/`，可通过 `--record-dir` 修改根目录。
 目录格式与真机采集一致：`meta/` 保存 schema 和 episode 索引，`data/chunk-000/`
 保存 Parquet，`videos/chunk-000/observation.images.ego_view/` 保存第一视角 MP4。
 每个控制帧包含完整 MuJoCo `qpos/qvel/ctrl`、PICO SMPL 参考、SONIC token、策略
 动作和手柄输入；Sweep 物体状态包含在完整 `qpos` 中。
+
+一次启动可连续采集多条 episode：用 `grip+A` 保存当前条，使用 `grip+X` 重置，
+再用 `grip+A` 开始下一条。每次保存后终端会打印帧数和视频时长。
 
 MuJoCo 接触不是模拟 JuQiao 通道，而是在每个物理子步读取 G1 与场景的接触，
 再汇总到 50 Hz 控制帧。数据字段 `observation.contact.*` 包含机器人部位、被接触

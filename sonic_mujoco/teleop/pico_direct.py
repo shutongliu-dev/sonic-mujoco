@@ -45,6 +45,7 @@ class PicoEvents:
     toggle_pose: bool = False
     toggle_recording: bool = False
     abort_recording: bool = False
+    reset_scene: bool = False
 
 
 def _lerp_quaternion(left: np.ndarray, right: np.ndarray, alpha: float) -> np.ndarray:
@@ -182,7 +183,7 @@ class PicoTeleop(TeleopBase):
         self._frame_index = 0
         self.controls = PicoControls()
         self._events = PicoEvents()
-        self._previous_combos = (False, False, False, False)
+        self._previous_combos = (False, False, False, False, False)
 
     def read(self) -> TeleopCommand | None:
         self._update_controls()
@@ -245,11 +246,13 @@ class PicoTeleop(TeleopBase):
             right_grip=float(self._call("get_right_grip", 0.0)),
         )
         start_stop = controls.a and controls.b and controls.x and controls.y
+        reset_scene = controls.x and controls.left_grip > 0.5
         combos = (
             start_stop,
             controls.a and controls.x,
             controls.a and controls.left_grip > 0.5,
             controls.b and controls.left_grip > 0.5,
+            reset_scene,
         )
         rising = tuple(
             current and not previous
@@ -258,13 +261,17 @@ class PicoTeleop(TeleopBase):
         self.controls = controls
         self._events = PicoEvents(
             start_stop=self._events.start_stop or rising[0],
-            toggle_pose=self._events.toggle_pose or (rising[1] and not start_stop),
+            toggle_pose=(
+                self._events.toggle_pose
+                or (rising[1] and not start_stop and not reset_scene)
+            ),
             toggle_recording=(
                 self._events.toggle_recording or (rising[2] and not start_stop)
             ),
             abort_recording=(
                 self._events.abort_recording or (rising[3] and not start_stop)
             ),
+            reset_scene=self._events.reset_scene or (rising[4] and not start_stop),
         )
         self._previous_combos = combos
 

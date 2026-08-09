@@ -80,6 +80,8 @@ class TeleopControlTest(unittest.TestCase):
             )
             recorder.start()
             append_frame(recorder)
+            self.assertEqual(recorder.frame_count, 1)
+            self.assertAlmostEqual(recorder.duration_seconds, 0.02)
             path = recorder.finish()
 
             self.assertIsNotNone(path)
@@ -94,6 +96,7 @@ class TeleopControlTest(unittest.TestCase):
             self.assertTrue((session / "meta/modality.json").is_file())
             self.assertTrue((session / "meta/episodes.jsonl").is_file())
             self.assertTrue(recorder.last_preview.is_file())
+            self.assertEqual(recorder.frame_count, 0)
 
             recorder.start()
             append_frame(recorder)

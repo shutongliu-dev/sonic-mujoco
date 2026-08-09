@@ -106,6 +106,14 @@ class EpisodeRecorder:
     def session_directory(self) -> Path | None:
         return self._session
 
+    @property
+    def frame_count(self) -> int:
+        return len(self._frames)
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.frame_count / self.fps
+
     def start(self) -> None:
         self._frames.clear()
         self.active = True

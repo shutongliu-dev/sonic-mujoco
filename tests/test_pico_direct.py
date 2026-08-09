@@ -116,6 +116,17 @@ class PicoDirectTest(unittest.TestCase):
         teleop.read()
         self.assertTrue(teleop.pop_events().abort_recording)
 
+        sdk.buttons["B"] = False
+        teleop.read()
+        sdk.buttons["X"] = True
+        teleop.read()
+        events = teleop.pop_events()
+        self.assertTrue(events.reset_scene)
+        self.assertFalse(events.toggle_pose)
+
+        teleop.read()
+        self.assertFalse(teleop.pop_events().reset_scene)
+
 
 if __name__ == "__main__":
     unittest.main()

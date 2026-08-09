@@ -3,7 +3,11 @@ import time
 from pathlib import Path
 
 from sonic_mujoco.controllers.sonic import SonicController, SonicEncoder
-from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv, MujocoG1SweepEnv
+from sonic_mujoco.envs.mujoco.g1 import (
+    MujocoG1EmptyEnv,
+    MujocoG1SweepEnv,
+    RobotCommand,
+)
 from sonic_mujoco.recording import EpisodeRecorder
 from sonic_mujoco.teleop import (
     PicoControls,
@@ -82,6 +86,9 @@ def main() -> None:
     completed = 0
     started = False
     task_completed = False
+    latest_token = None
+    latest_action = None
+    latest_robot_command = None
     try:
         if not args.headless:
             env.render()
@@ -95,13 +102,43 @@ def main() -> None:
 
             updated_mode = next_mode(mode, events)
             if updated_mode is not mode:
-                if recorder.active and updated_mode is not TeleopMode.POSE:
+                if recorder.active and updated_mode is TeleopMode.OFF:
                     _finish_recording(recorder)
+                if (
+                    mode is TeleopMode.POSE
+                    and updated_mode is TeleopMode.READY
+                    and latest_robot_command is not None
+                ):
+                    state = env.get_robot_state()
+                    zero = state.joint_position * 0.0
+                    latest_robot_command = RobotCommand(
+                        joint_position=state.joint_position,
+                        joint_velocity=zero,
+                        feedforward_torque=zero,
+                        kp=latest_robot_command.kp,
+                        kd=latest_robot_command.kd,
+                    )
                 mode = updated_mode
                 encoder.reset()
                 controller.reset()
                 started = False
                 print(_mode_message(mode))
+
+            if events.reset_scene:
+                if recorder.active:
+                    recorder.abort()
+                    print("Recording aborted before scene reset.")
+                env.reset()
+                encoder.reset()
+                controller.reset()
+                latest_command = None
+                latest_token = None
+                latest_action = None
+                latest_robot_command = None
+                started = False
+                task_completed = False
+                print("Scene, SONIC history, and controller reset.")
+                continue
 
             if events.abort_recording and recorder.active:
                 recorder.abort()
@@ -124,6 +161,9 @@ def main() -> None:
                 if token is not None:
                     robot_command = controller.act(state, token)
                     env.step(robot_command, steps=controller.steps_per_action)
+                    latest_token = token
+                    latest_action = controller.last_action.copy()
+                    latest_robot_command = robot_command
                     completed += 1
                     if not started:
                         print(
@@ -131,17 +171,32 @@ def main() -> None:
                         )
                         started = True
                     if recorder.active and latest_command is not None:
-                        recorder.append(
-                            time=env.time,
-                            qpos=env.data.qpos,
-                            qvel=env.data.qvel,
-                            ctrl=env.data.ctrl,
-                            command=latest_command,
-                            token=token,
-                            action=controller.last_action,
-                            controls=controls,
-                            contacts=env.contacts.last_frame,
+                        _append_recording(
+                            recorder,
+                            env,
+                            latest_command,
+                            latest_token,
+                            latest_action,
+                            controls,
                         )
+            elif (
+                recorder.active
+                and mode is not TeleopMode.OFF
+                and latest_command is not None
+                and latest_token is not None
+                and latest_action is not None
+                and latest_robot_command is not None
+            ):
+                env.step(latest_robot_command, steps=controller.steps_per_action)
+                completed += 1
+                _append_recording(
+                    recorder,
+                    env,
+                    latest_command,
+                    latest_token,
+                    latest_action,
+                    controls,
+                )
             if (
                 not task_completed
                 and isinstance(env, MujocoG1SweepEnv)
@@ -155,7 +210,10 @@ def main() -> None:
                     break
                 env.render()
             if video is not None:
-                video.render()
+                video.render(
+                    recording=recorder.active,
+                    elapsed_seconds=recorder.duration_seconds,
+                )
             control_dt = env.timestep * controller.steps_per_action
             time.sleep(max(0.0, control_dt - (time.monotonic() - tick)))
     except KeyboardInterrupt:
@@ -181,12 +239,36 @@ def _mode_message(mode: TeleopMode) -> str:
 
 
 def _finish_recording(recorder: EpisodeRecorder) -> None:
+    frames = recorder.frame_count
+    duration = recorder.duration_seconds
     path = recorder.finish()
     if path is None:
         print("Recording stopped without any control frames.")
     else:
         print(f"Recording saved to {path}.")
+        print(f"Episode summary: {frames} frames, {duration:.2f} seconds.")
         print(f"Contact preview saved to {recorder.last_preview}.")
+
+
+def _append_recording(
+    recorder: EpisodeRecorder,
+    env,
+    command,
+    token,
+    action,
+    controls: PicoControls,
+) -> None:
+    recorder.append(
+        time=env.time,
+        qpos=env.data.qpos,
+        qvel=env.data.qvel,
+        ctrl=env.data.ctrl,
+        command=command,
+        token=token,
+        action=action,
+        controls=controls,
+        contacts=env.contacts.last_frame,
+    )
 
 
 if __name__ == "__main__":
