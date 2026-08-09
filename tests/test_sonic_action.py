@@ -5,7 +5,6 @@ import numpy as np
 from sonic_mujoco.controllers.sonic import action_to_command
 from sonic_mujoco.controllers.sonic.parameters import KD, KP
 
-
 REFERENCE_ACTION = np.array(
     [0.36033609509468079, 0.52699214220046997, 0.27547883987426758,
      -0.81493759155273438, -0.46288877725601196, -0.0637216717004776,

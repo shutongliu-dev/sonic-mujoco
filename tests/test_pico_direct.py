@@ -1,3 +1,4 @@
+import json
 import unittest
 
 import numpy as np
@@ -17,6 +18,7 @@ class FakeSdk:
         self.closed = False
         self.buttons = {name: False for name in "ABXY"}
         self.left_grip = 0.0
+        self.device_commands = []
 
     def init(self) -> None:
         pass
@@ -54,6 +56,9 @@ class FakeSdk:
 
     def get_left_grip(self) -> float:
         return self.left_grip
+
+    def device_control_json(self, device_id: str, command: str) -> None:
+        self.device_commands.append((device_id, json.loads(command)))
 
 
 class PicoDirectTest(unittest.TestCase):
@@ -115,6 +120,31 @@ class PicoDirectTest(unittest.TestCase):
         sdk.buttons["B"] = True
         teleop.read()
         self.assertTrue(teleop.pop_events().abort_recording)
+
+        sdk.buttons["B"] = False
+        teleop.read()
+        sdk.buttons["X"] = True
+        teleop.read()
+        events = teleop.pop_events()
+        self.assertTrue(events.reset_scene)
+        self.assertFalse(events.toggle_pose)
+
+        teleop.read()
+        self.assertFalse(teleop.pop_events().reset_scene)
+
+    def test_haptic_command_uses_xrobotoolkit_device_control(self) -> None:
+        sdk = FakeSdk()
+        teleop = PicoTeleop(sdk, start_service=False)
+
+        sent = teleop.send_haptics("pico-sn", 0.2, 0.7, 60, 150)
+
+        self.assertTrue(sent)
+        self.assertEqual(sdk.device_commands[0][0], "pico-sn")
+        command = sdk.device_commands[0][1]
+        self.assertEqual(command["functionName"], "HapticImpulse")
+        value = json.loads(command["value"])
+        self.assertEqual(value["right"], 0.7)
+        teleop.close()
 
 
 if __name__ == "__main__":

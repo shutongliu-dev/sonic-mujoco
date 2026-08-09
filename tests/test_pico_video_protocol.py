@@ -1,10 +1,31 @@
-from pathlib import Path
 import runpy
 import struct
 import unittest
+from pathlib import Path
+from unittest.mock import Mock
 
 BRIDGE = Path(__file__).parents[1] / "scripts/pico_video_bridge.py"
 PROTOCOL = runpy.run_path(str(BRIDGE))
+FRAME_HEADER = PROTOCOL["FRAME_HEADER"]
+VIDEO_BRIDGE = PROTOCOL["VideoBridge"]
+
+
+class _Buffer:
+    @classmethod
+    def new_allocate(
+        cls, _memory: object, size: int, _allocator: object
+    ) -> "_Buffer":
+        return cls(size)
+
+    def __init__(self, size: int) -> None:
+        self.data = bytes(size)
+
+    def fill(self, _offset: int, data: bytes) -> None:
+        self.data = bytes(data)
+
+
+class _Gst:
+    Buffer = _Buffer
 
 
 class PicoVideoProtocolTest(unittest.TestCase):
@@ -38,6 +59,22 @@ class PicoVideoProtocolTest(unittest.TestCase):
     def test_rejects_truncated_command(self) -> None:
         with self.assertRaisesRegex(ValueError, "too short"):
             PROTOCOL["parse_command"](b"OPEN")
+
+    def test_repeats_last_frame_to_keep_stream_alive(self) -> None:
+        payload = b"same-frame"
+        bridge = object.__new__(VIDEO_BRIDGE)
+        bridge._frames = FRAME_HEADER.pack(b"SMVF", 2, 1, 1, len(payload)) + payload
+        bridge._pipeline = Mock()
+        bridge.Gst = _Gst
+
+        self.assertTrue(bridge._push_frame())
+        self.assertTrue(bridge._push_frame())
+
+        source = bridge._pipeline.get_by_name.return_value
+        self.assertEqual(source.emit.call_count, 2)
+        for call in source.emit.call_args_list:
+            self.assertEqual(call.args[0], "push-buffer")
+            self.assertEqual(call.args[1].data, payload)
 
 
 if __name__ == "__main__":

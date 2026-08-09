@@ -1,10 +1,11 @@
-from collections import deque
 import ctypes
-from dataclasses import dataclass
 import importlib.util
+import json
 import os
-from pathlib import Path
 import subprocess
+from collections import deque
+from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -45,6 +46,7 @@ class PicoEvents:
     toggle_pose: bool = False
     toggle_recording: bool = False
     abort_recording: bool = False
+    reset_scene: bool = False
 
 
 def _lerp_quaternion(left: np.ndarray, right: np.ndarray, alpha: float) -> np.ndarray:
@@ -182,7 +184,7 @@ class PicoTeleop(TeleopBase):
         self._frame_index = 0
         self.controls = PicoControls()
         self._events = PicoEvents()
-        self._previous_combos = (False, False, False, False)
+        self._previous_combos = (False, False, False, False, False)
 
     def read(self) -> TeleopCommand | None:
         self._update_controls()
@@ -232,6 +234,35 @@ class PicoTeleop(TeleopBase):
         self._events = PicoEvents()
         return events
 
+    def send_haptics(
+        self,
+        device_id: str,
+        left: float,
+        right: float,
+        duration_ms: int,
+        frequency_hz: int,
+    ) -> bool:
+        value = json.dumps(
+            {
+                "left": left,
+                "right": right,
+                "durationMs": duration_ms,
+                "frequencyHz": frequency_hz,
+            },
+            separators=(",", ":"),
+        )
+        command = {
+            "functionName": "HapticImpulse",
+            "value": value,
+        }
+        try:
+            self._sdk.device_control_json(
+                device_id, json.dumps(command, separators=(",", ":"))
+            )
+        except Exception:  # noqa: BLE001
+            return False
+        return True
+
     def _update_controls(self) -> None:
         controls = PicoControls(
             a=bool(self._call("get_A_button", False)),
@@ -245,11 +276,13 @@ class PicoTeleop(TeleopBase):
             right_grip=float(self._call("get_right_grip", 0.0)),
         )
         start_stop = controls.a and controls.b and controls.x and controls.y
+        reset_scene = controls.x and controls.left_grip > 0.5
         combos = (
             start_stop,
             controls.a and controls.x,
             controls.a and controls.left_grip > 0.5,
             controls.b and controls.left_grip > 0.5,
+            reset_scene,
         )
         rising = tuple(
             current and not previous
@@ -258,27 +291,31 @@ class PicoTeleop(TeleopBase):
         self.controls = controls
         self._events = PicoEvents(
             start_stop=self._events.start_stop or rising[0],
-            toggle_pose=self._events.toggle_pose or (rising[1] and not start_stop),
+            toggle_pose=(
+                self._events.toggle_pose
+                or (rising[1] and not start_stop and not reset_scene)
+            ),
             toggle_recording=(
                 self._events.toggle_recording or (rising[2] and not start_stop)
             ),
             abort_recording=(
                 self._events.abort_recording or (rising[3] and not start_stop)
             ),
+            reset_scene=self._events.reset_scene or (rising[4] and not start_stop),
         )
         self._previous_combos = combos
 
     def _call(self, name: str, default):
         try:
             return getattr(self._sdk, name)()
-        except Exception:
+        except Exception:  # noqa: BLE001
             return default
 
     def _controller_axes(self) -> tuple[float, float, float, float]:
         try:
             left, right = self._sdk.get_left_axis(), self._sdk.get_right_axis()
             return float(left[0]), float(left[1]), float(right[0]), float(right[1])
-        except Exception:
+        except Exception:  # noqa: BLE001
             return 0.0, 0.0, 0.0, 0.0
 
     def close(self) -> None:

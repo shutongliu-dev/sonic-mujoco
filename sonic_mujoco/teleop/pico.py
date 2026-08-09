@@ -90,7 +90,7 @@ def decode_pose_message(message: bytes) -> TeleopCommand:
 
 
 class PicoZmqTeleop(TeleopBase):
-    """Compatibility receiver for the original GR00T PICO manager."""
+    """Receive PICO poses from an external ZMQ publisher."""
 
     def __init__(self, endpoint: str = "tcp://127.0.0.1:5556") -> None:
         try:

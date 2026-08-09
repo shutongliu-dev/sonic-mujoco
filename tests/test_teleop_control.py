@@ -1,12 +1,12 @@
 import json
 import tempfile
-from pathlib import Path
 import unittest
+from pathlib import Path
 
 import numpy as np
 import pyarrow.parquet as pq
 
-from sonic_mujoco.contact import ContactFrame, MAX_CONTACTS
+from sonic_mujoco.contact import MAX_CONTACTS, ContactFrame
 from sonic_mujoco.recording import EpisodeRecorder
 from sonic_mujoco.teleop import (
     PicoControls,
@@ -80,6 +80,8 @@ class TeleopControlTest(unittest.TestCase):
             )
             recorder.start()
             append_frame(recorder)
+            self.assertEqual(recorder.frame_count, 1)
+            self.assertAlmostEqual(recorder.duration_seconds, 0.02)
             path = recorder.finish()
 
             self.assertIsNotNone(path)
@@ -94,6 +96,7 @@ class TeleopControlTest(unittest.TestCase):
             self.assertTrue((session / "meta/modality.json").is_file())
             self.assertTrue((session / "meta/episodes.jsonl").is_file())
             self.assertTrue(recorder.last_preview.is_file())
+            self.assertEqual(recorder.frame_count, 0)
 
             recorder.start()
             append_frame(recorder)

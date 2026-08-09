@@ -1,6 +1,5 @@
 import numpy as np
 
-
 TOKEN_DIM = 64
 HISTORY_FRAMES = 10
 OBSERVATION_DIM = 994

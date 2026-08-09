@@ -1,10 +1,10 @@
+import html
+import json
+import shutil
 from collections import Counter
 from datetime import datetime
 from fractions import Fraction
-import html
-import json
 from pathlib import Path
-import shutil
 
 import numpy as np
 
@@ -105,6 +105,14 @@ class EpisodeRecorder:
     @property
     def session_directory(self) -> Path | None:
         return self._session
+
+    @property
+    def frame_count(self) -> int:
+        return len(self._frames)
+
+    @property
+    def duration_seconds(self) -> float:
+        return self.frame_count / self.fps
 
     def start(self) -> None:
         self._frames.clear()
@@ -211,7 +219,7 @@ class EpisodeRecorder:
 
     def _new_session_directory(self) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
-        name = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+        name = datetime.now().astimezone().strftime("%Y-%m-%d-%H-%M-%S")
         path = self.directory / name
         suffix = 1
         while path.exists():

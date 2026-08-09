@@ -16,7 +16,6 @@ from .parameters import (
     PHYSICS_STEPS_PER_CONTROL,
 )
 
-
 Array = NDArray[np.float64]
 Policy = Callable[[Array], Array]
 

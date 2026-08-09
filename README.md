@@ -1,126 +1,182 @@
 # sonic_mujoco
 
-面向 SONIC-compatible Unitree G1 的轻量 MuJoCo 遥操作工程。项目包含 G1
-仿真、SONIC encoder/decoder、PICO 全身追踪、机器人第一视角视频回传，以及
-Sweep 场景。实现保持单进程控制主循环，不引入额外框架。
+`sonic_mujoco` 是面向 Unitree G1 的轻量 MuJoCo 全身遥操作与数据采集工程。
+它在一个进程内完成 PICO 全身姿态接收、SONIC 推理、G1 仿真控制、第一视角
+回传、接触触觉反馈和 LeRobot 风格 episode 录制。
+
+项目当前提供空场景和 Sweep 扫桌任务。实现强调清晰的数据流和较少的运行时
+组件，适合仿真遥操作、示教数据采集及 sim-to-real 实验。
+
+## 功能
+
+- MuJoCo 中的 29-DoF G1、PD 控制与 SONIC encoder/decoder 推理；
+- PICO 24 关节全身追踪和 50 Hz 真人到 G1 动作映射；
+- G1 头部相机到 PICO 的低延迟 H.264/H.265 画面回传；
+- 同一进程内连续录制多条 episode，并显示 `REC` 与录制时长；
+- 机器人—场景接触的力、冲量和接触部位记录；
+- 按碰撞、按压和滑动状态生成左右手柄触觉反馈；
+- 接近真实布置、带物理随机化的 Sweep 桌面场景。
+
+## 环境要求
+
+- Ubuntu 22.04 或 24.04；
+- Python 3.10 及以上；
+- `uv` Python 包管理器；
+- 支持 OpenGL/EGL 的 NVIDIA 驱动；
+- PICO 头显与手柄；
+- XRRobotKit PC Service 和 Python SDK；
+- SONIC encoder/decoder ONNX 权重。
+
+项目不提交 SONIC 权重和 XRRobotKit 二进制。准备以下文件：
+
+```text
+models/model_encoder.onnx
+models/model_decoder.onnx
+<XR_SDK>/xrobotoolkit_sdk*.so
+<XR_SDK>/lib/libPXREARobotSDK.so
+```
+
+XRRobotKit PC Service 需要安装在 `/opt/apps/roboticsservice`。PICO 客户端的独立
+构建说明见 [`pico_client/README.md`](pico_client/README.md)。
 
 ## 安装
 
 ```bash
-cd ~/lst/sonic-mujoco
-~/.local/bin/uv sync --extra sonic --extra teleop --extra recording
-.venv/bin/python scripts/setup_xrobotoolkit.py
+git clone https://github.com/shutongliu-dev/sonic-mujoco.git
+cd sonic-mujoco
+
+mkdir -p models
+# 将 model_encoder.onnx 和 model_decoder.onnx 放入 models/
+uv sync --extra sonic --extra teleop --extra recording
+.venv/bin/python scripts/setup_xrobotoolkit.py <XR_SDK>
 ```
 
-最后一条命令把 XRoboToolkit SDK 复制到项目的 `.xrobotoolkit/`。该目录不进入
-Git。Ubuntu 上仍需安装并保留 `/opt/apps/roboticsservice`；PICO 链路运行时不再
-读取旧 GR00T 工程。头显中仍使用 XRRobotKit 客户端。
+视频回传依赖系统 GStreamer：
 
-ONNX 模型不提交到 Git。默认从下面的位置读取：
-
-```text
-~/lst/GR00T-WholeBodyControl/gear_sonic_deploy/policy/release/
+```bash
+sudo apt install python3-gi gir1.2-gstreamer-1.0 \
+  gstreamer1.0-tools gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+  gstreamer1.0-plugins-ugly
 ```
 
-也可以通过 `--encoder` 和 `--decoder` 指定其他路径。
+先运行无窗口自检：
+
+```bash
+.venv/bin/python scripts/run_sim.py --headless --steps 100
+```
+
+也可以通过 `SONIC_POLICY_DIR` 改变默认模型目录，或用 `--encoder`、`--decoder`
+分别指定模型文件。
 
 ## PICO 遥操作
 
-1. 让 PICO 和 Ubuntu 主机处于同一个局域网。
-2. 在 PICO 的 XRRobotKit 中填写 Ubuntu 主机地址 `192.168.3.29` 并连接。
-3. 在 Ubuntu 上运行：
-
-```bash
-cd ~/lst/sonic-mujoco
-DISPLAY=:0 XAUTHORITY=/run/user/$(id -u)/gdm/Xauthority \
-  .venv/bin/python scripts/run_pico_teleop.py --scene sweep
-```
-
-默认行为包括：
-
-- 直接启动 XR 服务并读取 PICO 的 24 个身体关节；
-- 将真人全身姿态转换为 SONIC 的 SMPL 输入，以 50 Hz 控制 MuJoCo G1；
-- 从模型中的 `head_camera` 渲染画面；
-- 在 TCP `13579` 端口响应 XRRobotKit，并向头显回传低延迟 H.264 双目画面。
-
-连接后使用与真机一致的核心操作：
-
-- `A+B+X+Y`：启动或停止控制；
-- `A+X`：在待机与真人全身 `POSE` 遥操之间切换；
-- 按住左菜单键：暂停动作跟随，松开后恢复；
-- 左 `grip+A`：开始或结束一段数据录制；
-- 左 `grip+B`：放弃当前录制。
-
-这里不使用 locomotion Planner 或摇杆行走。人的迈步、转身、抬腿和手臂动作会
-直接成为 G1 的参考动作。启动后先按 `A+B+X+Y` 进入待机，再按 `A+X` 开始
-全身遥操。
-
-录制结果默认保存到 `records/<采集时间>/`，可通过 `--record-dir` 修改根目录。
-目录格式与真机采集一致：`meta/` 保存 schema 和 episode 索引，`data/chunk-000/`
-保存 Parquet，`videos/chunk-000/observation.images.ego_view/` 保存第一视角 MP4。
-每个控制帧包含完整 MuJoCo `qpos/qvel/ctrl`、PICO SMPL 参考、SONIC token、策略
-动作和手柄输入；Sweep 物体状态包含在完整 `qpos` 中。
-
-MuJoCo 接触不是模拟 JuQiao 通道，而是在每个物理子步读取 G1 与场景的接触，
-再汇总到 50 Hz 控制帧。数据字段 `observation.contact.*` 包含机器人部位、被接触
-物体、世界坐标、最大法向/切向力、累计法向冲量和采样次数。每帧按冲量保留最
-重要的 16 组部位—物体接触；body ID 对应名称保存在 `meta/info.json`。
-
-每条 episode 结束后还会生成：
-
-- `previews/episode_XXXXXX.html`：视频、曲线和主要接触部位汇总，直接打开即可；
-- `previews/episode_XXXXXX_contact.svg`：接触力曲线和接触帧时间轴，可直接打开；
-- `previews/episode_XXXXXX_contact.json`：最大力、累计冲量和主要接触部位摘要；
-- `videos/.../episode_XXXXXX.mp4`：与 Parquet 同帧数的机器人第一视角录像。
-
-Parquet 保留包括脚—地面在内的全部机器人—场景接触；预览会排除 `world` 地面
-支撑力，以免站立重量掩盖手臂、桌面和任务物体的接触曲线。
-
-只调试数值、不需要落盘视频时可加 `--no-record-video`。该参数不影响 PICO 里的
-实时画面；`--no-pico-video` 与数据集视频也是两个独立开关。
-
-只在头显里看画面、不显示 Ubuntu viewer：
-
-```bash
-MUJOCO_GL=egl .venv/bin/python scripts/run_pico_teleop.py --scene sweep --headless
-```
-
-`--headless` 不会关闭 PICO 画面。仅调试姿态、暂时关闭视频可加
-`--no-pico-video`。若端口冲突，可用 `--video-listen 0.0.0.0:其他端口`，并同步
-修改 XRRobotKit 中的连接端口。
-
-旧 GR00T PICO manager 仍可作为兼容路径使用：
+1. 将 PICO 与 Ubuntu 主机接入同一局域网。
+2. 在 PICO 客户端中连接 Ubuntu 主机 IP。
+3. 在主机上启动 Sweep 场景：
 
 ```bash
 .venv/bin/python scripts/run_pico_teleop.py \
-  --endpoint tcp://127.0.0.1:5556 --no-pico-video
+  --scene sweep \
+  --pico-device TestDevice
 ```
+
+`--pico-device` 使用 XRRobotKit 显示的设备名，并用于发送手柄触觉。也可以通过
+环境变量 `SONIC_PICO_DEVICE` 设置。只在 PICO 中看画面时可使用 EGL：
+
+```bash
+MUJOCO_GL=egl .venv/bin/python scripts/run_pico_teleop.py \
+  --scene sweep --headless --pico-device TestDevice
+```
+
+`--headless` 只关闭主机 viewer，不会关闭 PICO 画面。`--no-pico-video` 用于关闭
+实时回传；`--no-record-video` 只关闭数据集视频，两者互不影响。
+
+### 手柄操作
+
+| 操作 | 功能 |
+| --- | --- |
+| `A+B+X+Y` | 启动或停止控制 |
+| `A+X` | 在待机和全身 POSE 遥操之间切换 |
+| 按住左菜单键 | 暂停动作跟随，松开恢复 |
+| 左 `grip+A` | 开始或结束当前 episode |
+| 左 `grip+B` | 放弃当前 episode |
+| 左 `grip+X` | 重置场景、SONIC history 和控制器 |
+
+`grip` 指手柄中间由中指扣动的握持扳机。一次常用的连续采集流程是：
+
+1. 连接主机后按 `A+B+X+Y` 解锁，再按 `A+X` 进入 POSE 遥操；
+2. 调整好人与 G1 的位置，按左 `grip+A` 开始录制；
+3. 完成动作后再次按左 `grip+A`，保存当前 episode；
+4. 按左 `grip+X` 重置场景，再重复步骤 2–3；
+5. 当前动作无效时按左 `grip+B`，直接丢弃该 episode。
+
+项目不使用摇杆规划行走。操作者的迈步、转身、下蹲和手臂动作直接构成 G1 的
+参考动作。录制中使用 `A+X` 不会结束 episode，但暂停片段通常不适合作为训练
+数据。
+
+## 数据采集
+
+录制默认写入 `records/<session>/`：
+
+```text
+records/<session>/
+├── meta/                 # schema、episode 索引和 body 名称
+├── data/chunk-000/       # Parquet 控制帧
+├── videos/chunk-000/     # G1 第一视角 MP4
+└── previews/             # episode 与接触数据预览
+```
+
+每个控制帧包含 MuJoCo `qpos/qvel/ctrl`、PICO 姿态、SONIC token、策略动作、
+手柄输入和最多 16 组重要接触。接触字段包括机器人部位、场景物体、世界坐标、
+法向/切向力、法向冲量和物理采样次数。
+
+一次进程可连续采集多条 episode。结束一条后终端会输出文件位置、帧数和时长；
+保存期间 PICO 持续收到最后一帧，画面不会因编码和落盘而断流。
+
+## 接触触觉
+
+- 左右手臂接触分别反馈到对应手柄；
+- 胸腹、腰和骨盆接触同时反馈到两个手柄；
+- 突然碰撞、持续按压和切向滑动使用不同的强度、时长和频率；
+- 腿脚接触不触发手柄，避免站立和行走产生持续噪声。
+
+触觉来自 MuJoCo 接触求解结果，不模拟特定实体触觉皮肤。相同的接触数据会写入
+episode，可用于训练、回放和后续传感器对齐。
 
 ## Sweep 场景
 
-Sweep 桌面按真机布置由蓝色胶带分成左右两侧。杯子、齿轮、白卡、纸板和小鸭
-出生在同一侧；将五个物体全部扫过中线后，终端显示 `Sweep task completed.`。
-`env.reset(seed=7)` 可得到可复现的初始位置。
+Sweep 场景按真实采集桌面布置：木纹桌面由蓝色胶带纵向分区，杯子、齿轮、
+白卡、纸板和小鸭位于同一侧。桌子是带质量、摩擦和顺应性的自由刚体，明显
+碰撞会产生移动与晃动；任务物体的质量、摩擦和初始位姿会在 reset 时小范围
+随机化。
 
-## 代码边界
+## 代码结构
 
-- `envs/mujoco`：MuJoCo 生命周期、G1 状态和 PD 控制；
-- `teleop/pico_direct.py`：XR SDK 加载、SMPL 前向运动学和 50 Hz 姿态采样；
-- `teleop/control.py`：启停与真人 `POSE` 模式切换；
-- `recording.py`：对齐保存 MuJoCo、PICO 和 SONIC 控制帧；
-- `teleop/pico_video.py`：MuJoCo 相机渲染和共享帧；
-- `scripts/pico_video_bridge.py`：XRRobotKit 控制协议、H.264 编码和 TCP 回传；
-- `controllers/sonic`：与旧 C++ deploy 数值对齐的 encoder/decoder；
-- `envs/mujoco/g1/sweep_env.py`：Sweep reset、状态和成功条件。
+```text
+sonic_mujoco/
+├── controllers/sonic/        # observation、encoder 和 decoder
+├── envs/mujoco/g1/           # G1 环境、PD 控制和 Sweep 场景
+├── teleop/                    # PICO 姿态、控制状态、视频和触觉
+├── contact.py                 # 物理子步接触汇总
+└── recording.py               # episode、视频和预览写入
+scripts/
+├── run_sim.py                 # 最小仿真自检
+├── run_pico_teleop.py         # 遥操作与采集入口
+├── pico_video_bridge.py       # XRRobotKit 视频协议与编码
+└── setup_xrobotoolkit.py      # 安装本地 XR SDK
+```
 
-四元数统一使用 `wxyz`。`RobotState` 和 `RobotCommand` 使用硬件/MuJoCo joint
-order，SONIC 内部显式转换为 IsaacLab order。
+四元数统一使用 `wxyz`。硬件/MuJoCo joint order 与 SONIC 内部 order 的转换均在
+边界处显式完成。
 
 ## 验证
 
 ```bash
 .venv/bin/python -m unittest discover -s tests
+uvx ruff check .
 ```
 
-测试覆盖模型、PD 控制、SONIC C++ 等价性、PICO 协议、直接姿态转换和视频控制
-协议。视频桥还可以在无头显时通过本机回环完成 H.264 编码链路自检。
+测试覆盖 G1 模型、PD 控制、SONIC observation/action、PICO 协议、姿态转换、
+视频回传、连续录制和触觉映射。依赖外部 C++/TensorRT 参考实现的等价性测试会
+在未配置相应环境变量时自动跳过。
