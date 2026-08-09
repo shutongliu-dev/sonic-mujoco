@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sonic-mujoco"
+version = "0.1.0"
+description = "Minimal MuJoCo environment for the SONIC-compatible Unitree G1"
+requires-python = ">=3.10"
+dependencies = ["mujoco>=3.3,<4", "scipy>=1.10,<2"]
+
+[project.optional-dependencies]
+sonic = ["onnxruntime>=1.16,<1.24"]
+teleop = ["pyzmq>=25,<28"]
+recording = ["av>=14,<18", "pyarrow>=16,<26"]
+
+[tool.setuptools.packages.find]
+include = ["sonic_mujoco*"]
+
+[tool.setuptools.package-data]
+sonic_mujoco = [
+  "assets/mujoco/robots/g1/*.xml",
+  "assets/mujoco/robots/g1/*.md",
+  "assets/mujoco/robots/g1/meshes/*.STL",
+  "assets/mujoco/meshes/*.obj",
+  "assets/mujoco/scenes/g1/*.xml",
+  "assets/mujoco/textures/*.md",
+  "assets/mujoco/textures/*.png",
+  "assets/pico/*.md",
+  "assets/pico/*.npz",
+]
