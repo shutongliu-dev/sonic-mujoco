@@ -47,11 +47,25 @@ class MujocoG1SweepEnv(MujocoG1Env):
         self._object_qpos_addresses = np.array(
             [self._freejoint_qpos_address(f"{name}_joint") for name in OBJECT_NAMES]
         )
+        self._table_body_id = self._body_id("table")
         self._target_site_id = self._site_id("sweep_target")
+        self._physics_body_ids = np.r_[self._table_body_id, self._object_body_ids]
+        self._base_body_mass = self.model.body_mass[self._physics_body_ids].copy()
+        self._base_body_inertia = self.model.body_inertia[
+            self._physics_body_ids
+        ].copy()
+        self._physics_geom_ids = np.flatnonzero(
+            np.isin(self.model.geom_bodyid, self._physics_body_ids)
+            & (self.model.geom_contype != 0)
+        )
+        self._base_geom_friction = self.model.geom_friction[
+            self._physics_geom_ids
+        ].copy()
 
     def reset(self, seed: int | None = None) -> None:
         super().reset()
         rng = np.random.default_rng(seed)
+        self._randomize_physics(rng)
         positions = SPAWN_POSITIONS.copy()
         positions[:, :2] += rng.uniform(-0.02, 0.02, (len(OBJECT_NAMES), 2))
         yaws = SPAWN_YAWS + rng.uniform(-0.08, 0.08, len(OBJECT_NAMES))
@@ -79,9 +93,33 @@ class MujocoG1SweepEnv(MujocoG1Env):
     def _positions_in_target(self, position: NDArray[np.float64]) -> bool:
         center = self.data.site_xpos[self._target_site_id]
         half_size = self.model.site_size[self._target_site_id]
-        inside_xy = np.abs(position[:, :2] - center[:2]) <= half_size[:2]
-        on_table = (position[:, 2] >= 0.76) & (position[:, 2] <= 0.90)
+        rotation = self.data.site_xmat[self._target_site_id].reshape(3, 3)
+        local_position = (position - center) @ rotation
+        inside_xy = np.abs(local_position[:, :2]) <= half_size[:2]
+        on_table = (local_position[:, 2] >= -0.02) & (
+            local_position[:, 2] <= 0.14
+        )
         return bool(np.all(inside_xy) and np.all(on_table))
+
+    def _randomize_physics(self, rng: np.random.Generator) -> None:
+        mass_scale = rng.uniform(0.9, 1.1, len(self._physics_body_ids))
+        mass_scale[0] = rng.uniform(0.97, 1.03)
+        self.model.body_mass[self._physics_body_ids] = (
+            self._base_body_mass * mass_scale
+        )
+        self.model.body_inertia[self._physics_body_ids] = (
+            self._base_body_inertia * mass_scale[:, None]
+        )
+
+        friction_scale = rng.uniform(0.9, 1.1, len(self._physics_body_ids))
+        body_scale = {
+            body_id: scale
+            for body_id, scale in zip(self._physics_body_ids, friction_scale)
+        }
+        for index, geom_id in enumerate(self._physics_geom_ids):
+            scale = body_scale[self.model.geom_bodyid[geom_id]]
+            self.model.geom_friction[geom_id] = self._base_geom_friction[index] * scale
+        mujoco.mj_setConst(self.model, self.data)
 
     def _body_id(self, name: str) -> int:
         body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, name)

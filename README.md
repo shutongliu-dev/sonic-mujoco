@@ -108,7 +108,9 @@ MUJOCO_GL=egl .venv/bin/python scripts/run_pico_teleop.py --scene sweep --headle
 
 Sweep 桌面按真机布置由蓝色胶带分成左右两侧。杯子、齿轮、白卡、纸板和小鸭
 出生在同一侧；将五个物体全部扫过中线后，终端显示 `Sweep task completed.`。
-`env.reset(seed=7)` 可得到可复现的初始位置。
+桌子按 30 kg 自由刚体建模，轻碰保持稳定，明显撞击时会通过脚垫摩擦产生小幅
+移动和晃动。物体质量、材料摩擦和初始位姿在每次 reset 时做小范围随机化；
+`env.reset(seed=7)` 可得到可复现的初始场景与物理参数。
 
 ## 代码边界
 
