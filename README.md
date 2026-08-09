@@ -93,6 +93,18 @@ Parquet 保留包括脚—地面在内的全部机器人—场景接触；预览
 MUJOCO_GL=egl .venv/bin/python scripts/run_pico_teleop.py --scene sweep --headless
 ```
 
+控制器触觉需要带客户端补丁的 XRRobotKit APK，并传入头显界面显示的设备 SN：
+
+```bash
+MUJOCO_GL=egl .venv/bin/python scripts/run_pico_teleop.py \
+  --scene sweep --headless --pico-device <PICO_SN>
+```
+
+程序只把左右手臂与场景的接触映射到对应手柄，以 20 Hz 发送不超过 0.75 强度的
+短振动；腿部支撑力不会触发。客户端补丁位于
+`pico_client/xrobotoolkit-haptics.patch`，适用于 XRoboToolkit Unity Client
+`c932609`（Unity `2022.3.16f1`）。
+
 `--headless` 不会关闭 PICO 画面。仅调试姿态、暂时关闭视频可加
 `--no-pico-video`。若端口冲突，可用 `--video-listen 0.0.0.0:其他端口`，并同步
 修改 XRRobotKit 中的连接端口。

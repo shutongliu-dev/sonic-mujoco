@@ -2,6 +2,7 @@ from collections import deque
 import ctypes
 from dataclasses import dataclass
 import importlib.util
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -232,6 +233,31 @@ class PicoTeleop(TeleopBase):
         events = self._events
         self._events = PicoEvents()
         return events
+
+    def send_haptics(
+        self,
+        device_id: str,
+        left: float,
+        right: float,
+        duration_ms: int,
+        frequency_hz: int,
+    ) -> bool:
+        command = {
+            "functionName": "HapticImpulse",
+            "value": {
+                "left": left,
+                "right": right,
+                "durationMs": duration_ms,
+                "frequencyHz": frequency_hz,
+            },
+        }
+        try:
+            self._sdk.device_control_json(
+                device_id, json.dumps(command, separators=(",", ":"))
+            )
+        except Exception:
+            return False
+        return True
 
     def _update_controls(self) -> None:
         controls = PicoControls(

@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from sonic_mujoco.envs.mujoco.g1 import (
 )
 from sonic_mujoco.recording import EpisodeRecorder
 from sonic_mujoco.teleop import (
+    ContactHaptics,
     PicoControls,
     PicoEvents,
     PicoTeleop,
@@ -41,6 +43,11 @@ def parse_args() -> argparse.Namespace:
         help="use the legacy GR00T PICO manager at this ZMQ endpoint",
     )
     parser.add_argument("--no-pico-video", action="store_true")
+    parser.add_argument(
+        "--pico-device",
+        default=os.environ.get("SONIC_PICO_DEVICE"),
+        help="XRRobotKit device SN used for controller haptics",
+    )
     parser.add_argument("--video-listen", default="0.0.0.0:13579")
     parser.add_argument("--record-dir", type=Path, default=Path("records"))
     parser.add_argument("--no-record-video", action="store_true")
@@ -58,6 +65,14 @@ def main() -> None:
     controller = SonicController.from_onnx(args.decoder)
     teleop = PicoZmqTeleop(args.endpoint) if args.endpoint else PicoTeleop()
     direct = isinstance(teleop, PicoTeleop)
+    haptics = None
+    if direct and args.pico_device:
+        haptics = ContactHaptics(
+            env.contacts.body_names,
+            lambda left, right, duration, frequency: teleop.send_haptics(
+                args.pico_device, left, right, duration, frequency
+            ),
+        )
     video = None
     if not args.endpoint and not args.no_pico_video:
         video = PicoVideo(env.model, env.data, listen=args.video_listen)
@@ -82,6 +97,8 @@ def main() -> None:
         print("Press A+B+X+Y to arm, then A+X to enter full-body POSE teleop.")
         if video is not None:
             print(f"PICO video control is listening on {args.video_listen}.")
+        if haptics is not None:
+            print(f"PICO contact haptics enabled for {args.pico_device}.")
 
     completed = 0
     started = False
@@ -94,6 +111,7 @@ def main() -> None:
             env.render()
         while args.steps == 0 or completed < args.steps:
             tick = time.monotonic()
+            stepped = False
             command = teleop.read()
             if command is not None:
                 latest_command = command
@@ -161,6 +179,7 @@ def main() -> None:
                 if token is not None:
                     robot_command = controller.act(state, token)
                     env.step(robot_command, steps=controller.steps_per_action)
+                    stepped = True
                     latest_token = token
                     latest_action = controller.last_action.copy()
                     latest_robot_command = robot_command
@@ -188,6 +207,7 @@ def main() -> None:
                 and latest_robot_command is not None
             ):
                 env.step(latest_robot_command, steps=controller.steps_per_action)
+                stepped = True
                 completed += 1
                 _append_recording(
                     recorder,
@@ -197,6 +217,10 @@ def main() -> None:
                     latest_action,
                     controls,
                 )
+            if haptics is not None and stepped:
+                if not haptics.update(env.contacts.last_frame, time.monotonic()):
+                    print("PICO haptics unavailable; disabling contact vibration.")
+                    haptics = None
             if (
                 not task_completed
                 and isinstance(env, MujocoG1SweepEnv)

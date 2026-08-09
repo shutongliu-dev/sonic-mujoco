@@ -1,0 +1,47 @@
+diff --git a/Assets/Scripts/UI/UICameraCtrlPC.cs b/Assets/Scripts/UI/UICameraCtrlPC.cs
+--- a/Assets/Scripts/UI/UICameraCtrlPC.cs
++++ b/Assets/Scripts/UI/UICameraCtrlPC.cs
+@@ -1,5 +1,7 @@
+ using System;
++using System.Globalization;
+ using LitJson;
+ using Robot;
+ using Unity.XR.PICO.TOBSupport;
++using Unity.XR.PXR;
+ using UnityEngine;
+@@ -156,5 +158,33 @@ public partial class UICameraCtrl
+                 TcpHandler.SendFunctionValue("VRCameraClose", cameraParam.ToJson());
+             }
+         }
++        else if (functionName == "HapticImpulse")
++        {
++            try
++            {
++                value = value.Replace("\\", "");
++                JsonData json = JsonMapper.ToObject(value);
++                float left = Mathf.Clamp01(float.Parse(
++                    json["left"].ToString(), CultureInfo.InvariantCulture));
++                float right = Mathf.Clamp01(float.Parse(
++                    json["right"].ToString(), CultureInfo.InvariantCulture));
++                int duration = Mathf.Clamp(int.Parse(json["durationMs"].ToString()), 0, 100);
++                int frequency = Mathf.Clamp(int.Parse(json["frequencyHz"].ToString()), 50, 500);
++                if (left > 0)
++                {
++                    PXR_Input.SendHapticImpulse(
++                        PXR_Input.VibrateType.LeftController, left, duration, frequency);
++                }
++                if (right > 0)
++                {
++                    PXR_Input.SendHapticImpulse(
++                        PXR_Input.VibrateType.RightController, right, duration, frequency);
++                }
++            }
++            catch (Exception e)
++            {
++                Debug.LogError("HapticImpulse: " + e.Message);
++            }
++        }
+     }
+-}
+\ No newline at end of file
++}
