@@ -89,7 +89,6 @@ class VideoBridge:
         self._listen = listen
         self._pipeline = None
         self._video_socket = None
-        self._last_sequence = -1
         self._lock = threading.Lock()
 
     def run(self) -> None:
@@ -163,7 +162,7 @@ class VideoBridge:
             return False
         first = FRAME_HEADER.unpack(self._frames[: FRAME_HEADER.size])
         magic, sequence, _, _, size = first
-        if magic != b"SMVF" or sequence % 2 or sequence == self._last_sequence:
+        if magic != b"SMVF" or sequence % 2:
             return True
         data = self._frames[FRAME_HEADER.size : FRAME_HEADER.size + size]
         if FRAME_HEADER.unpack(self._frames[: FRAME_HEADER.size])[1] != sequence:
@@ -171,7 +170,6 @@ class VideoBridge:
         buffer = self.Gst.Buffer.new_allocate(None, size, None)
         buffer.fill(0, data)
         self._pipeline.get_by_name("source").emit("push-buffer", buffer)
-        self._last_sequence = sequence
         return True
 
     def _send_sample(self, sink):
