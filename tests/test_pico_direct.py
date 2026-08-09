@@ -142,7 +142,8 @@ class PicoDirectTest(unittest.TestCase):
         self.assertEqual(sdk.device_commands[0][0], "pico-sn")
         command = sdk.device_commands[0][1]
         self.assertEqual(command["functionName"], "HapticImpulse")
-        self.assertEqual(command["value"]["right"], 0.7)
+        value = json.loads(command["value"])
+        self.assertEqual(value["right"], 0.7)
         teleop.close()
 
 

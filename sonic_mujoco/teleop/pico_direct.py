@@ -242,14 +242,18 @@ class PicoTeleop(TeleopBase):
         duration_ms: int,
         frequency_hz: int,
     ) -> bool:
-        command = {
-            "functionName": "HapticImpulse",
-            "value": {
+        value = json.dumps(
+            {
                 "left": left,
                 "right": right,
                 "durationMs": duration_ms,
                 "frequencyHz": frequency_hz,
             },
+            separators=(",", ":"),
+        )
+        command = {
+            "functionName": "HapticImpulse",
+            "value": value,
         }
         try:
             self._sdk.device_control_json(
