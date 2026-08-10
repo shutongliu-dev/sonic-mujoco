@@ -4,7 +4,7 @@
 它在一个进程内完成 PICO 全身姿态接收、SONIC 推理、G1 仿真控制、第一视角
 回传、接触触觉反馈和 LeRobot 风格 episode 录制。
 
-项目当前提供空场景和 Sweep 扫桌任务。实现强调清晰的数据流和较少的运行时
+项目当前提供空场景、Sweep 扫桌和 Chair lean 椅背倚靠任务。实现强调清晰的数据流和较少的运行时
 组件，适合仿真遥操作、示教数据采集及 sim-to-real 实验。
 
 ## 功能
@@ -15,7 +15,7 @@
 - 同一进程内连续录制多条 episode，并显示 `REC` 与录制时长；
 - 机器人—场景接触的力、冲量和接触部位记录；
 - 按碰撞、按压和滑动状态生成左右手柄触觉反馈；
-- 接近真实布置、带物理随机化的 Sweep 桌面场景。
+- 接近真实布置、带物理随机化的 Sweep 和 Chair lean 场景。
 
 ## 环境要求
 
@@ -92,6 +92,14 @@ MUJOCO_GL=egl .venv/bin/python scripts/run_pico_teleop.py \
 `--headless` 只关闭主机 viewer，不会关闭 PICO 画面。`--no-pico-video` 用于关闭
 实时回传；`--no-record-video` 只关闭数据集视频，两者互不影响。
 
+Chair lean 场景使用相同操作流程：
+
+```bash
+.venv/bin/python scripts/run_pico_teleop.py \
+  --scene chair_lean \
+  --pico-device TestDevice
+```
+
 ### 手柄操作
 
 | 操作 | 功能 |
@@ -151,12 +159,22 @@ Sweep 场景按真实采集桌面布置：木纹桌面由蓝色胶带纵向分�
 碰撞会产生移动与晃动；任务物体的质量、摩擦和初始位姿会在 reset 时小范围
 随机化。
 
+## Chair lean 场景
+
+Chair lean 按参考椅的 56 cm 宽、54 cm 深、35 cm 座高和 66 cm 总高搭建。椅子
+是约 11 kg 的自由刚体，脚垫具有较高摩擦，轻微碰撞会产生真实反作用，强碰撞
+仍可能移动或倾倒。椅背采用柔顺接触模型；reset 时小范围随机化椅背宽高、倾角、
+软硬度、椅子质量与摩擦，以及 G1 的初始距离、朝向和左右偏移。织物外观使用
+Poly Haven 的 CC0 Terlenka 贴图，视觉表面与稳定的简化碰撞体相互独立。
+
+场景不自动判定成功或结束 episode，操作者根据稳定倚靠状态控制录制。
+
 ## 代码结构
 
 ```text
 sonic_mujoco/
 ├── controllers/sonic/        # observation、encoder 和 decoder
-├── envs/mujoco/g1/           # G1 环境、PD 控制和 Sweep 场景
+├── envs/mujoco/g1/           # G1 环境、PD 控制与任务场景
 ├── teleop/                    # PICO 姿态、控制状态、视频和触觉
 ├── contact.py                 # 物理子步接触汇总
 └── recording.py               # episode、视频和预览写入

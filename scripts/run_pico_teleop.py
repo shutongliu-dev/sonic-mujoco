@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sonic_mujoco.controllers.sonic import SonicController, SonicEncoder
 from sonic_mujoco.envs.mujoco.g1 import (
+    MujocoG1ChairLeanEnv,
     MujocoG1EmptyEnv,
     MujocoG1SweepEnv,
     RobotCommand,
@@ -53,7 +54,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--record-dir", type=Path, default=Path("records"))
     parser.add_argument("--no-record-video", action="store_true")
     parser.add_argument("--task")
-    parser.add_argument("--scene", choices=("empty", "sweep"), default="empty")
+    parser.add_argument(
+        "--scene", choices=("empty", "sweep", "chair_lean"), default="empty"
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--steps", type=int, default=0)
     return parser.parse_args()
@@ -64,7 +67,12 @@ def main() -> None:
     for model in (args.encoder, args.decoder):
         if not model.is_file():
             raise SystemExit(f"SONIC model not found: {model}")
-    env = MujocoG1SweepEnv() if args.scene == "sweep" else MujocoG1EmptyEnv()
+    environments = {
+        "empty": MujocoG1EmptyEnv,
+        "sweep": MujocoG1SweepEnv,
+        "chair_lean": MujocoG1ChairLeanEnv,
+    }
+    env = environments[args.scene]()
     encoder = SonicEncoder.from_onnx(args.encoder)
     controller = SonicController.from_onnx(args.decoder)
     teleop = PicoZmqTeleop(args.endpoint) if args.endpoint else PicoTeleop()

@@ -3,11 +3,19 @@ import time
 
 import numpy as np
 
-from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv, RobotCommand
+from sonic_mujoco.envs.mujoco.g1 import (
+    MujocoG1ChairLeanEnv,
+    MujocoG1EmptyEnv,
+    MujocoG1SweepEnv,
+    RobotCommand,
+)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the minimal G1 MuJoCo scene")
+    parser.add_argument(
+        "--scene", choices=("empty", "sweep", "chair_lean"), default="empty"
+    )
     parser.add_argument("--headless", action="store_true", help="do not open the viewer")
     parser.add_argument("--steps", type=int, default=0, help="stop after this many steps")
     return parser.parse_args()
@@ -15,7 +23,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    env = MujocoG1EmptyEnv()
+    environments = {
+        "empty": MujocoG1EmptyEnv,
+        "sweep": MujocoG1SweepEnv,
+        "chair_lean": MujocoG1ChairLeanEnv,
+    }
+    env = environments[args.scene]()
     env.reset()
     state = env.get_robot_state()
     command = RobotCommand(

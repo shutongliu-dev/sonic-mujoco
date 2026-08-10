@@ -18,6 +18,10 @@ DEFAULT_TASKS = {
         "Use your forearm to sweep all objects across the divider from one side "
         "of the table to the other."
     ),
+    "chair_lean": (
+        "Walk to the chair from the front, turn around, adjust your position, "
+        "and gently lean back against the backrest."
+    ),
 }
 
 
