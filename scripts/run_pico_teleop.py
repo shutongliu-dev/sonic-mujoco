@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sonic_mujoco.controllers.sonic import SonicController, SonicEncoder
 from sonic_mujoco.envs.mujoco.g1 import (
+    MujocoG1BucketCarryEnv,
     MujocoG1ChairLeanEnv,
     MujocoG1EmptyEnv,
     MujocoG1SweepEnv,
@@ -55,7 +56,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-record-video", action="store_true")
     parser.add_argument("--task")
     parser.add_argument(
-        "--scene", choices=("empty", "sweep", "chair_lean"), default="empty"
+        "--scene",
+        choices=("empty", "sweep", "chair_lean", "bucket_carry"),
+        default="empty",
     )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--steps", type=int, default=0)
@@ -71,6 +74,7 @@ def main() -> None:
         "empty": MujocoG1EmptyEnv,
         "sweep": MujocoG1SweepEnv,
         "chair_lean": MujocoG1ChairLeanEnv,
+        "bucket_carry": MujocoG1BucketCarryEnv,
     }
     env = environments[args.scene]()
     encoder = SonicEncoder.from_onnx(args.encoder)

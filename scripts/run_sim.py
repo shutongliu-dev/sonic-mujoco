@@ -4,6 +4,7 @@ import time
 import numpy as np
 
 from sonic_mujoco.envs.mujoco.g1 import (
+    MujocoG1BucketCarryEnv,
     MujocoG1ChairLeanEnv,
     MujocoG1EmptyEnv,
     MujocoG1SweepEnv,
@@ -14,7 +15,9 @@ from sonic_mujoco.envs.mujoco.g1 import (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the minimal G1 MuJoCo scene")
     parser.add_argument(
-        "--scene", choices=("empty", "sweep", "chair_lean"), default="empty"
+        "--scene",
+        choices=("empty", "sweep", "chair_lean", "bucket_carry"),
+        default="empty",
     )
     parser.add_argument("--headless", action="store_true", help="do not open the viewer")
     parser.add_argument("--steps", type=int, default=0, help="stop after this many steps")
@@ -27,6 +30,7 @@ def main() -> None:
         "empty": MujocoG1EmptyEnv,
         "sweep": MujocoG1SweepEnv,
         "chair_lean": MujocoG1ChairLeanEnv,
+        "bucket_carry": MujocoG1BucketCarryEnv,
     }
     env = environments[args.scene]()
     env.reset()
