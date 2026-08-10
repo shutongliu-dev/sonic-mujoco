@@ -7,6 +7,7 @@ from sonic_mujoco.envs.mujoco.g1 import (
     MujocoG1BucketCarryEnv,
     MujocoG1ChairLeanEnv,
     MujocoG1EmptyEnv,
+    MujocoG1PlushCarryEnv,
     MujocoG1SweepEnv,
     RobotCommand,
 )
@@ -16,7 +17,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the minimal G1 MuJoCo scene")
     parser.add_argument(
         "--scene",
-        choices=("empty", "sweep", "chair_lean", "bucket_carry"),
+        choices=(
+            "empty",
+            "sweep",
+            "chair_lean",
+            "bucket_carry",
+            "plush_carry",
+        ),
         default="empty",
     )
     parser.add_argument("--headless", action="store_true", help="do not open the viewer")
@@ -31,6 +38,7 @@ def main() -> None:
         "sweep": MujocoG1SweepEnv,
         "chair_lean": MujocoG1ChairLeanEnv,
         "bucket_carry": MujocoG1BucketCarryEnv,
+        "plush_carry": MujocoG1PlushCarryEnv,
     }
     env = environments[args.scene]()
     env.reset()

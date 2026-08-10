@@ -4,7 +4,11 @@ import mujoco
 import numpy as np
 
 from sonic_mujoco.contact import MAX_CONTACTS, ContactRecorder
-from sonic_mujoco.envs.mujoco.g1 import MujocoG1SweepEnv, RobotCommand
+from sonic_mujoco.envs.mujoco.g1 import (
+    MujocoG1PlushCarryEnv,
+    MujocoG1SweepEnv,
+    RobotCommand,
+)
 
 
 def zero_command() -> RobotCommand:
@@ -41,6 +45,32 @@ class ContactRecorderTest(unittest.TestCase):
 
         self.env.step(zero_command(), steps=2)
         frame = self.env.contacts.last_frame
+        active = frame.robot_body_id >= 0
+
+        self.assertGreater(frame.count, 0)
+        self.assertTrue(np.any(frame.other_body_id[active] > 0))
+        self.assertGreater(frame.normal_impulse[active].sum(), 0.0)
+
+    def test_robot_flex_contact_is_accumulated(self) -> None:
+        plush_env = MujocoG1PlushCarryEnv()
+        self.addCleanup(plush_env.close)
+        plush_env.reset(seed=0)
+        hand_body = mujoco.mj_name2id(
+            plush_env.model,
+            mujoco.mjtObj.mjOBJ_BODY,
+            "right_wrist_yaw_link",
+        )
+        plush_joint = mujoco.mj_name2id(
+            plush_env.model, mujoco.mjtObj.mjOBJ_JOINT, "carry_plush_joint"
+        )
+        address = plush_env.model.jnt_qposadr[plush_joint]
+        plush_env.data.qpos[address : address + 3] = plush_env.data.xpos[
+            hand_body
+        ]
+        mujoco.mj_forward(plush_env.model, plush_env.data)
+
+        plush_env.step(zero_command(), steps=2)
+        frame = plush_env.contacts.last_frame
         active = frame.robot_body_id >= 0
 
         self.assertGreater(frame.count, 0)

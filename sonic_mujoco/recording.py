@@ -26,6 +26,10 @@ DEFAULT_TASKS = {
         "Carry the container to the designated area while holding it securely "
         "against your torso."
     ),
+    "plush_carry": (
+        "Carry the soft plush toy to the designated area while holding it "
+        "securely against your torso."
+    ),
 }
 
 

@@ -47,6 +47,9 @@ class ContactRecorder:
             or f"body_{body_id}"
             for body_id in range(model.nbody)
         )
+        self._flex_body_ids = tuple(
+            self._flex_root_body(flex_id) for flex_id in range(model.nflex)
+        )
         self._pairs: dict[tuple[int, int], _ContactValue] = {}
         self.last_frame = self._empty_frame()
 
@@ -58,8 +61,8 @@ class ContactRecorder:
         step_pairs: dict[tuple[int, int], _ContactValue] = {}
         for contact_id in range(data.ncon):
             contact = data.contact[contact_id]
-            body1 = int(self.model.geom_bodyid[contact.geom1])
-            body2 = int(self.model.geom_bodyid[contact.geom2])
+            body1 = self._contact_body(contact, 0)
+            body2 = self._contact_body(contact, 1)
             body1_is_robot = body1 in self.robot_body_ids
             body2_is_robot = body2 in self.robot_body_ids
             if body1_is_robot == body2_is_robot:
@@ -113,6 +116,35 @@ class ContactRecorder:
                 return True
             body_id = int(self.model.body_parentid[body_id])
         return False
+
+    def _contact_body(self, contact: mujoco.MjContact, side: int) -> int:
+        geom_id = int(contact.geom[side])
+        if geom_id >= 0:
+            return int(self.model.geom_bodyid[geom_id])
+        flex_id = int(contact.flex[side])
+        return self._flex_body_ids[flex_id] if flex_id >= 0 else 0
+
+    def _flex_root_body(self, flex_id: int) -> int:
+        address = int(self.model.flex_nodeadr[flex_id])
+        count = int(self.model.flex_nodenum[flex_id])
+        body_ids = self.model.flex_nodebodyid[address : address + count]
+        if not len(body_ids):
+            address = int(self.model.flex_vertadr[flex_id])
+            count = int(self.model.flex_vertnum[flex_id])
+            body_ids = self.model.flex_vertbodyid[address : address + count]
+        body_ids = [int(body_id) for body_id in body_ids if body_id > 0]
+        if not body_ids:
+            return 0
+
+        root = body_ids[0]
+        for body_id in body_ids[1:]:
+            ancestors = set()
+            while body_id > 0:
+                ancestors.add(body_id)
+                body_id = int(self.model.body_parentid[body_id])
+            while root not in ancestors and root > 0:
+                root = int(self.model.body_parentid[root])
+        return root
 
     @staticmethod
     def _empty_frame() -> ContactFrame:
