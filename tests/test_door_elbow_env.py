@@ -35,6 +35,25 @@ class DoorElbowEnvTest(unittest.TestCase):
         self.assertGreater(self.env.model.dof_damping[dof], 0.0)
         self.assertGreater(self.env.model.dof_frictionloss[dof], 0.0)
 
+    def test_door_opens_into_a_bounded_room_with_clear_aisle(self) -> None:
+        mujoco.mj_forward(self.env.model, self.env.data)
+        for name in (
+            "room_floor",
+            "room_left_wall",
+            "room_right_wall",
+            "room_back_wall",
+        ):
+            geom_id = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_GEOM, name
+            )
+            self.assertGreaterEqual(geom_id, 0)
+
+        for name in ("room_sofa_base", "room_table"):
+            geom_id = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_GEOM, name
+            )
+            self.assertGreater(abs(self.env.data.geom_xpos[geom_id, 1]), 0.8)
+
     def test_reset_is_seeded_and_randomizes_task_variations(self) -> None:
         self.env.reset(seed=12)
         first = self.env.get_scene_state()
