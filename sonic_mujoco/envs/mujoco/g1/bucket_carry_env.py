@@ -68,15 +68,7 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
                 self._geom_id("jug_cap"),
             ]
         )
-        self._visual_geom_ids = {
-            name: self._geom_id(name)
-            for name in (
-                "jug_water",
-                "jug_ridge_low",
-                "jug_ridge_mid",
-                "jug_ridge_high",
-            )
-        }
+        self._visual_mesh_id = self._mesh_id("water_gallon_mesh")
         self._container_radius = 0.14
         self._container_height = 0.51
         self._container_mass = 5.5
@@ -172,28 +164,11 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
         self.model.geom_pos[cap_id] = (0.0, 0.0, 0.97 * height)
         self.model.geom_size[cap_id] = (0.40 * radius, 0.03 * height, 0.0)
 
-        water_id = self._visual_geom_ids["jug_water"]
-        water_height = np.clip(
-            (self._container_mass - 2.0) / 8.0, 0.20, 0.75
-        ) * height
-        self.model.geom_pos[water_id] = (0.0, 0.0, water_height / 2)
-        self.model.geom_size[water_id] = (
-            0.82 * radius,
-            water_height / 2,
-            0.0,
+        self.model.mesh_scale[self._visual_mesh_id] = (
+            2 * radius / 0.29,
+            2 * radius / 0.29,
+            height / 0.50,
         )
-        for name, fraction in (
-            ("jug_ridge_low", 0.20),
-            ("jug_ridge_mid", 0.43),
-            ("jug_ridge_high", 0.66),
-        ):
-            geom_id = self._visual_geom_ids[name]
-            self.model.geom_pos[geom_id] = (0.0, 0.0, fraction * height)
-            self.model.geom_size[geom_id] = (
-                1.035 * radius,
-                0.018 * height,
-                0.0,
-            )
 
     def _place_scene(self, rng: np.random.Generator) -> None:
         source_position = np.array(
@@ -248,6 +223,12 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
         if geom_id < 0:
             raise ValueError(f"missing bucket-carry geom: {name}")
         return geom_id
+
+    def _mesh_id(self, name: str) -> int:
+        mesh_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_MESH, name)
+        if mesh_id < 0:
+            raise ValueError(f"missing bucket-carry mesh: {name}")
+        return mesh_id
 
     def _freejoint_qpos_address(self, name: str) -> int:
         joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)

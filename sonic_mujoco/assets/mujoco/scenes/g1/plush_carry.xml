@@ -6,12 +6,12 @@
 
   <asset>
     <texture name="plush_color" type="2d"
-      file="../../textures/avocado_plush_basecolor.png"/>
+      file="../../textures/avocado_plush_scan.png"/>
     <material name="plush_visual" texture="plush_color"
       specular="0.02" shininess="0.03"/>
     <material name="plush_collision" rgba="0.30 0.52 0.12 0"/>
     <mesh name="plush_visual_mesh"
-      file="../../../meshes/avocado_plush_visual.obj"/>
+      file="../../../meshes/avocado_plush_scan.obj"/>
   </asset>
 
   <worldbody>

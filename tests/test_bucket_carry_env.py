@@ -31,6 +31,23 @@ class BucketCarryEnvTest(unittest.TestCase):
                 self.env.model.jnt_type[joint_id], mujoco.mjtJoint.mjJNT_FREE
             )
 
+    def test_scanned_visuals_keep_primitive_collisions(self) -> None:
+        for visual, collision in (
+            ("source_table_visual", "source_table_top"),
+            ("jug_visual", "jug_body"),
+        ):
+            visual_id = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_GEOM, visual
+            )
+            collision_id = mujoco.mj_name2id(
+                self.env.model, mujoco.mjtObj.mjOBJ_GEOM, collision
+            )
+            self.assertEqual(
+                self.env.model.geom_type[visual_id], mujoco.mjtGeom.mjGEOM_MESH
+            )
+            self.assertEqual(self.env.model.geom_contype[visual_id], 0)
+            self.assertNotEqual(self.env.model.geom_contype[collision_id], 0)
+
     def test_reset_is_seeded(self) -> None:
         self.env.reset(seed=12)
         first = self.env.get_scene_state()

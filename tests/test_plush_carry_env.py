@@ -20,6 +20,13 @@ class PlushCarryEnvTest(unittest.TestCase):
             self.env.model, mujoco.mjtObj.mjOBJ_FLEX, "plush_flex"
         )
         self.assertGreater(self.env.model.flex_vertnum[flex_id], 100)
+        visual_id = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_GEOM, "plush_visual"
+        )
+        self.assertEqual(
+            self.env.model.geom_type[visual_id], mujoco.mjtGeom.mjGEOM_MESH
+        )
+        self.assertEqual(self.env.model.geom_contype[visual_id], 0)
 
     def test_reset_is_seeded(self) -> None:
         self.env.reset(seed=8)

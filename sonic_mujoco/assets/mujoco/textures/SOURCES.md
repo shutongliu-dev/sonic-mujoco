@@ -9,8 +9,5 @@ Dimitrios Savva and Rico Cilliers. The source asset is released under CC0.
 Rico Cilliers. The source asset is released under CC0. The checked-in file has
 MD5 `17347e440cd178a40b369e7572a6ec50`.
 
-`avocado_plush_basecolor.png` and `../meshes/avocado_plush_visual.obj` are
-derived from [Avocado Plush Toy](https://sketchfab.com/3d-models/avocado-plush-toy-567c19c1347542c3a63eabc8675257ce)
-by [melsto](https://sketchfab.com/melsto), licensed under
-[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The mesh was rotated,
-scaled to 74 cm, centered, and converted from the official glTF download.
+Sources for the task-object textures are documented with their matching meshes
+in [`../meshes/SOURCES.md`](../meshes/SOURCES.md).

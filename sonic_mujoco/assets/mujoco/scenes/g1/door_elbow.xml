@@ -8,6 +8,8 @@
       file="../../textures/wood_table_001_diff_512.png"/>
     <texture name="room_fabric" type="2d"
       file="../../textures/terlenka_diff_1k.png"/>
+    <texture name="door_scan_color" type="2d"
+      file="../../textures/interior_door_basecolor.png"/>
     <material name="door" texture="door_wood" texuniform="true"
       texrepeat="1.2 2.8" rgba="0.43 0.29 0.20 1"
       specular="0.08" shininess="0.12"/>
@@ -30,6 +32,10 @@
     <material name="paint_warm" rgba="0.68 0.43 0.25 1"/>
     <material name="metal" rgba="0.22 0.23 0.24 1"
       metallic="0.55" roughness="0.30"/>
+    <material name="door_scan_visual" texture="door_scan_color"
+      specular="0.12" shininess="0.20"/>
+    <material name="door_collision" rgba="0.43 0.29 0.20 0"/>
+    <mesh name="interior_door_mesh" file="../../../meshes/interior_door.obj"/>
   </asset>
 
   <default>
@@ -153,24 +159,28 @@
         armature="0.04" limited="true"/>
       <inertial pos="0 0.45 1.02" mass="25.0"
         diaginertia="10.35 8.67 1.69"/>
+      <geom name="door_visual_mesh" class="door_visual" type="mesh"
+        mesh="interior_door_mesh" pos="0 0.45 0"
+        material="door_scan_visual"/>
 
       <geom name="door_leaf" class="door_contact" type="box"
-        pos="0 0.45 1.02" size="0.022 0.45 1.02" material="door"/>
+        pos="0 0.45 1.02" size="0.022 0.45 1.02"
+        material="door_collision"/>
       <geom class="door_visual" type="box" pos="-0.024 0.45 1.48"
-        size="0.010 0.31 0.34" material="door_trim"/>
+        size="0.010 0.31 0.34" material="door_collision"/>
       <geom class="door_visual" type="box" pos="-0.024 0.45 0.63"
-        size="0.010 0.31 0.37" material="door_trim"/>
+        size="0.010 0.31 0.37" material="door_collision"/>
       <geom class="door_visual" type="box" pos="0.024 0.45 1.48"
-        size="0.010 0.31 0.34" material="door_trim"/>
+        size="0.010 0.31 0.34" material="door_collision"/>
       <geom class="door_visual" type="box" pos="0.024 0.45 0.63"
-        size="0.010 0.31 0.37" material="door_trim"/>
+        size="0.010 0.31 0.37" material="door_collision"/>
 
       <geom name="door_handle_front" class="door_contact" type="capsule"
         fromto="-0.085 0.76 1.00 -0.030 0.76 1.00" size="0.025"
-        material="metal"/>
+        material="door_collision"/>
       <geom name="door_handle_back" class="door_contact" type="capsule"
         fromto="0.030 0.76 1.00 0.085 0.76 1.00" size="0.025"
-        material="metal"/>
+        material="door_collision"/>
       <geom class="door_visual" type="cylinder" pos="0 0.005 0.35"
         size="0.025 0.075" material="metal"/>
       <geom class="door_visual" type="cylinder" pos="0 0.005 1.02"

@@ -25,6 +25,17 @@ class ChairLeanEnvTest(unittest.TestCase):
             self.env.model.jnt_type[joint_id], mujoco.mjtJoint.mjJNT_FREE
         )
         self.assertAlmostEqual(self.env.model.body_mass[chair_id], 11.0)
+        visual_id = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_GEOM, "chair_visual"
+        )
+        back_id = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_GEOM, "chair_back"
+        )
+        self.assertEqual(
+            self.env.model.geom_type[visual_id], mujoco.mjtGeom.mjGEOM_MESH
+        )
+        self.assertEqual(self.env.model.geom_contype[visual_id], 0)
+        self.assertNotEqual(self.env.model.geom_contype[back_id], 0)
 
     def test_reset_is_seeded_and_randomizes_task_variations(self) -> None:
         self.env.reset(seed=17)

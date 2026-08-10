@@ -34,6 +34,14 @@ class DoorElbowEnvTest(unittest.TestCase):
         self.assertAlmostEqual(self.env.model.body_mass[body_id], 25.0)
         self.assertGreater(self.env.model.dof_damping[dof], 0.0)
         self.assertGreater(self.env.model.dof_frictionloss[dof], 0.0)
+        visual_id = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_GEOM, "door_visual_mesh"
+        )
+        self.assertEqual(
+            self.env.model.geom_type[visual_id], mujoco.mjtGeom.mjGEOM_MESH
+        )
+        self.assertEqual(self.env.model.geom_contype[visual_id], 0)
+        self.assertNotEqual(self.env.model.geom_contype[leaf_id], 0)
 
     def test_door_opens_into_a_bounded_room_with_clear_aisle(self) -> None:
         mujoco.mj_forward(self.env.model, self.env.data)
