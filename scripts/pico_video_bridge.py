@@ -75,6 +75,14 @@ def receive_exact(connection: socket.socket, size: int) -> bytes | None:
     return bytes(chunks)
 
 
+def connect_video(ip: str, port: int) -> socket.socket:
+    connection = socket.create_connection((ip, port), timeout=3)
+    # The timeout is only for establishing the connection. During streaming,
+    # brief receiver stalls must not tear down the camera until PICO reconnects.
+    connection.settimeout(None)
+    return connection
+
+
 class VideoBridge:
     def __init__(self, frame_path: str, listen: str) -> None:
         import gi
@@ -140,7 +148,7 @@ class VideoBridge:
             "appsink name=sink emit-signals=true sync=false max-buffers=1 drop=true"
         )
         try:
-            video_socket = socket.create_connection((config.ip, config.port), timeout=3)
+            video_socket = connect_video(config.ip, config.port)
             pipeline = self.Gst.parse_launch(pipeline_text)
         except (OSError, self.GLib.Error) as error:
             print(f"Unable to open PICO video: {error}", flush=True)

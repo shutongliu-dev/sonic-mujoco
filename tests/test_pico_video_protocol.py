@@ -2,7 +2,7 @@ import runpy
 import struct
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 BRIDGE = Path(__file__).parents[1] / "scripts/pico_video_bridge.py"
 PROTOCOL = runpy.run_path(str(BRIDGE))
@@ -75,6 +75,17 @@ class PicoVideoProtocolTest(unittest.TestCase):
         for call in source.emit.call_args_list:
             self.assertEqual(call.args[0], "push-buffer")
             self.assertEqual(call.args[1].data, payload)
+
+    def test_stream_has_no_timeout_after_connecting(self) -> None:
+        connection = Mock()
+        with patch.object(
+            PROTOCOL["socket"], "create_connection", return_value=connection
+        ) as create_connection:
+            result = PROTOCOL["connect_video"]("192.168.3.87", 12345)
+
+        self.assertIs(result, connection)
+        create_connection.assert_called_once_with(("192.168.3.87", 12345), timeout=3)
+        connection.settimeout.assert_called_once_with(None)
 
 
 if __name__ == "__main__":
