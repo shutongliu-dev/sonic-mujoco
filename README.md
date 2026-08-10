@@ -117,6 +117,14 @@ Bucket carry 场景也使用相同操作流程：
   --pico-device TestDevice
 ```
 
+肘部或肩部开门场景使用：
+
+```bash
+.venv/bin/python scripts/run_pico_teleop.py \
+  --scene door_elbow \
+  --pico-device TestDevice
+```
+
 ### 手柄操作
 
 | 操作 | 功能 |
@@ -211,6 +219,17 @@ carry 默认间距的三倍。G1 从桌子长边一侧接近约 74 cm 高的牛�
 reset 会随机化玩偶 0.9–2.0 kg 的重量、软硬度、表面摩擦和初始姿态。柔性体与
 胸部、上臂和前臂的接触会进入同一套 episode 数据和 PICO 手柄反馈。高精度网格只
 负责显示，简化柔性体负责稳定接触；场景不自动判定成功。
+
+## Door elbow 场景
+
+Door elbow 使用 90 × 204 cm、约 20–30 kg 的室内木门。门板通过带阻尼、静摩擦和
+100° 限位的真实铰链连接门框；reset 会随机化门重、门轴阻尼、开启阻力、门面摩擦、
+1–10° 初始开角，以及 G1 的初始距离、身体夹角和左右执行侧。肩部、肘部、前臂和
+上臂接触沿用统一的接触记录与 PICO 触觉反馈，不自动判定任务成功。
+
+视觉比例参考 SAPIEN PartNet-Mobility Door `9410`（model
+`ec245748cbad16b1d747a43c11e738e9`）。SAPIEN 账户审核通过后，官方网格只替换非碰撞
+视觉层；门轴、碰撞、随机化和数据格式保持不变。
 
 ## 代码结构
 

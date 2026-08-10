@@ -7,6 +7,7 @@ from sonic_mujoco.controllers.sonic import SonicController, SonicEncoder
 from sonic_mujoco.envs.mujoco.g1 import (
     MujocoG1BucketCarryEnv,
     MujocoG1ChairLeanEnv,
+    MujocoG1DoorElbowEnv,
     MujocoG1EmptyEnv,
     MujocoG1PlushCarryEnv,
     MujocoG1SweepEnv,
@@ -62,6 +63,7 @@ def parse_args() -> argparse.Namespace:
             "empty",
             "sweep",
             "chair_lean",
+            "door_elbow",
             "bucket_carry",
             "plush_carry",
         ),
@@ -81,6 +83,7 @@ def main() -> None:
         "empty": MujocoG1EmptyEnv,
         "sweep": MujocoG1SweepEnv,
         "chair_lean": MujocoG1ChairLeanEnv,
+        "door_elbow": MujocoG1DoorElbowEnv,
         "bucket_carry": MujocoG1BucketCarryEnv,
         "plush_carry": MujocoG1PlushCarryEnv,
     }

@@ -1,0 +1,91 @@
+<mujoco model="g1_door_elbow">
+  <include file="common.xml"/>
+  <include file="../../robots/g1/g1_29dof_with_hand.xml"/>
+  <option integrator="implicitfast"/>
+
+  <asset>
+    <texture name="door_wood" type="2d"
+      file="../../textures/wood_table_001_diff_512.png"/>
+    <material name="door" texture="door_wood" texuniform="true"
+      texrepeat="1.2 2.8" rgba="0.43 0.29 0.20 1"
+      specular="0.08" shininess="0.12"/>
+    <material name="door_trim" rgba="0.31 0.23 0.18 1"
+      specular="0.06" shininess="0.10"/>
+    <material name="wall" rgba="0.73 0.70 0.65 1"
+      specular="0.02" shininess="0.04"/>
+    <material name="floor_lab" rgba="0.47 0.48 0.48 1"
+      reflectance="0.08"/>
+    <material name="metal" rgba="0.22 0.23 0.24 1"
+      metallic="0.55" roughness="0.30"/>
+  </asset>
+
+  <default>
+    <default class="door_contact">
+      <geom density="0" friction="0.62 0.012 0.001"
+        solref="0.012 1" solimp="0.90 0.97 0.002"/>
+    </default>
+    <default class="door_visual">
+      <geom density="0" contype="0" conaffinity="0"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <light pos="0.4 -1.1 2.8" dir="0.2 0.3 -1" directional="true"
+      diffuse="0.86 0.83 0.78"/>
+    <light pos="2.4 1.0 2.2" dir="-0.4 -0.2 -1" directional="true"
+      diffuse="0.42 0.43 0.45"/>
+    <geom name="floor" type="plane" size="0 0 0.05"
+      material="floor_lab" friction="1.0 0.01 0.001"/>
+
+    <!-- A 94 cm by 210 cm residential doorway in a 12 cm wall. -->
+    <geom name="wall_left" type="box" pos="1.70 1.53 1.25"
+      size="0.06 1.00 1.25" material="wall"/>
+    <geom name="wall_right" type="box" pos="1.70 -1.53 1.25"
+      size="0.06 1.00 1.25" material="wall"/>
+    <geom name="wall_header" type="box" pos="1.70 0 2.30"
+      size="0.06 0.47 0.20" material="wall"/>
+    <geom name="frame_left" type="box" pos="1.64 0.51 1.05"
+      size="0.055 0.030 1.05" material="door_trim"/>
+    <geom name="frame_right" type="box" pos="1.64 -0.51 1.05"
+      size="0.055 0.030 1.05" material="door_trim"/>
+    <geom name="frame_header" type="box" pos="1.64 0 2.13"
+      size="0.055 0.53 0.030" material="door_trim"/>
+    <geom name="threshold" type="box" pos="1.54 0 0.004"
+      size="0.075 0.47 0.004" material="metal"
+      friction="0.85 0.01 0.001"/>
+
+    <!-- Visual proportions follow SAPIEN Door 9410. Primitive collision keeps
+         shoulder and forearm contact stable when the visual mesh is swapped. -->
+    <body name="door" pos="1.52 -0.45 0.018">
+      <joint name="door_hinge" type="hinge" axis="0 0 1"
+        range="-1.745 0.02" damping="1.6" frictionloss="2.8"
+        armature="0.04" limited="true"/>
+      <inertial pos="0 0.45 1.02" mass="25.0"
+        diaginertia="10.35 8.67 1.69"/>
+
+      <geom name="door_leaf" class="door_contact" type="box"
+        pos="0 0.45 1.02" size="0.022 0.45 1.02" material="door"/>
+      <geom class="door_visual" type="box" pos="-0.024 0.45 1.48"
+        size="0.010 0.31 0.34" material="door_trim"/>
+      <geom class="door_visual" type="box" pos="-0.024 0.45 0.63"
+        size="0.010 0.31 0.37" material="door_trim"/>
+      <geom class="door_visual" type="box" pos="0.024 0.45 1.48"
+        size="0.010 0.31 0.34" material="door_trim"/>
+      <geom class="door_visual" type="box" pos="0.024 0.45 0.63"
+        size="0.010 0.31 0.37" material="door_trim"/>
+
+      <geom name="door_handle_front" class="door_contact" type="capsule"
+        fromto="-0.085 0.76 1.00 -0.030 0.76 1.00" size="0.025"
+        material="metal"/>
+      <geom name="door_handle_back" class="door_contact" type="capsule"
+        fromto="0.030 0.76 1.00 0.085 0.76 1.00" size="0.025"
+        material="metal"/>
+      <geom class="door_visual" type="cylinder" pos="0 0.005 0.35"
+        size="0.025 0.075" material="metal"/>
+      <geom class="door_visual" type="cylinder" pos="0 0.005 1.02"
+        size="0.025 0.075" material="metal"/>
+      <geom class="door_visual" type="cylinder" pos="0 0.005 1.69"
+        size="0.025 0.075" material="metal"/>
+    </body>
+  </worldbody>
+</mujoco>

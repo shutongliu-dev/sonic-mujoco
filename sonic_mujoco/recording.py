@@ -22,6 +22,7 @@ DEFAULT_TASKS = {
         "Walk to the chair from the front, turn around, adjust your position, "
         "and gently lean back against the backrest."
     ),
+    "door_elbow": "Open the door using your elbow and shoulder.",
     "bucket_carry": (
         "Carry the container to the designated area while holding it securely "
         "against your torso."
