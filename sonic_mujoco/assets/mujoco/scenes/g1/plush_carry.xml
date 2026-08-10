@@ -5,21 +5,14 @@
   <option integrator="implicitfast"/>
 
   <asset>
-    <material name="plush_green" rgba="0.30 0.52 0.12 1"
+    <texture name="plush_color" type="2d"
+      file="../../textures/avocado_plush_basecolor.png"/>
+    <material name="plush_visual" texture="plush_color"
       specular="0.02" shininess="0.03"/>
-    <material name="plush_belly" rgba="0.63 0.79 0.26 1"
-      specular="0.02" shininess="0.03"/>
-    <material name="plush_brown" rgba="0.25 0.13 0.07 1"
-      specular="0.02" shininess="0.03"/>
-    <material name="plush_pink" rgba="0.95 0.22 0.45 1"/>
-    <material name="plush_black" rgba="0.025 0.025 0.025 1"/>
+    <material name="plush_collision" rgba="0.30 0.52 0.12 0"/>
+    <mesh name="plush_visual_mesh"
+      file="../../../meshes/avocado_plush_visual.obj"/>
   </asset>
-
-  <default>
-    <default class="plush_detail">
-      <geom density="0" material="plush_brown" contype="0" conaffinity="0"/>
-    </default>
-  </default>
 
   <worldbody>
     <body name="carry_plush" pos="0.95 -0.82 1.132">
@@ -30,47 +23,16 @@
       <!-- Radial sliders provide local indentation without free soft-body drift. -->
       <flexcomp name="plush_flex" type="mesh" dim="3" dof="radial"
         file="../../../meshes/avocado_plush.obj" origin="0 0 0"
-        mass="0.60" radius="0.008" material="plush_green">
+        scale="1.10 1.26 1" quat="0.7071068 0 0 0.7071068"
+        mass="0.60" radius="0.008" material="plush_collision">
         <contact condim="3" friction="0.82 0.018 0.002"
           solref="0.025 1" solimp="0.88 0.95 0.004"
           internal="false" selfcollide="none"/>
         <edge equality="true" solref="0.055 1"/>
       </flexcomp>
 
-      <!-- Face and limbs are lightweight visual details attached to the soft core. -->
-      <geom name="plush_belly" class="plush_detail" type="ellipsoid"
-        pos="-0.155 0 -0.035" size="0.018 0.185 0.255"
-        material="plush_belly"/>
-      <geom name="plush_pit" class="plush_detail" type="ellipsoid"
-        pos="-0.178 0 -0.145" size="0.012 0.082 0.092"/>
-      <geom class="plush_detail" type="ellipsoid"
-        pos="-0.179 0.067 0.125" size="0.012 0.014 0.024"
-        material="plush_black"/>
-      <geom class="plush_detail" type="ellipsoid"
-        pos="-0.179 -0.067 0.125" size="0.012 0.014 0.024"
-        material="plush_black"/>
-      <geom class="plush_detail" type="ellipsoid"
-        pos="-0.181 0.112 0.075" size="0.009 0.025 0.013"
-        material="plush_pink"/>
-      <geom class="plush_detail" type="ellipsoid"
-        pos="-0.181 -0.112 0.075" size="0.009 0.025 0.013"
-        material="plush_pink"/>
-      <geom class="plush_detail" type="capsule"
-        fromto="-0.181 -0.040 0.065 -0.181 0.040 0.065" size="0.009"
-        material="plush_black"/>
-      <geom name="plush_arm_left" class="plush_detail" type="capsule"
-        fromto="-0.02 0.255 0.045 -0.055 0.345 -0.055" size="0.032"/>
-      <geom name="plush_arm_right" class="plush_detail" type="capsule"
-        fromto="-0.02 -0.255 0.045 -0.055 -0.345 -0.055" size="0.032"/>
-      <geom name="plush_foot_left" class="plush_detail" type="capsule"
-        fromto="-0.05 0.090 -0.240 -0.120 0.125 -0.280" size="0.035"/>
-      <geom name="plush_foot_right" class="plush_detail" type="capsule"
-        fromto="-0.05 -0.090 -0.240 -0.120 -0.125 -0.280" size="0.035"/>
-      <geom class="plush_detail" type="capsule"
-        fromto="0 0 0.36 0.01 0.02 0.445" size="0.018"/>
-      <geom class="plush_detail" type="ellipsoid"
-        pos="0 0.065 0.405" size="0.025 0.095 0.025"
-        quat="0.9239 0.3827 0 0" material="plush_green"/>
+      <geom name="plush_visual" type="mesh" mesh="plush_visual_mesh"
+        material="plush_visual" density="0" contype="0" conaffinity="0"/>
     </body>
   </worldbody>
 </mujoco>

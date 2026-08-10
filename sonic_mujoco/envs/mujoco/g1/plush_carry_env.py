@@ -163,10 +163,10 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
 
     def _place_scene(self, rng: np.random.Generator) -> None:
         source = np.array(
-            [rng.uniform(0.90, 1.00), rng.uniform(-0.90, -0.76), 0.0]
+            [rng.uniform(0.90, 1.00), rng.uniform(-2.54, -2.38), 0.0]
         )
         target = np.array(
-            [rng.uniform(0.90, 1.05), rng.uniform(0.76, 0.94), 0.0]
+            [rng.uniform(0.90, 1.05), rng.uniform(2.38, 2.56), 0.0]
         )
         self._set_freejoint(
             self._source_qpos, source, rng.uniform(-0.05, 0.05)
@@ -184,13 +184,15 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
         )
         robot = np.array(
             [
-                rng.uniform(-0.14, -0.02),
-                source[1] + rng.uniform(-0.08, 0.08),
+                source[0] + rng.uniform(-0.08, 0.08),
+                source[1] + rng.uniform(-0.92, -0.82),
                 0.793,
             ]
         )
         self._set_freejoint(
-            self._robot_qpos, robot, rng.uniform(-0.10, 0.10)
+            self._robot_qpos,
+            robot,
+            np.pi / 2 + rng.uniform(-0.08, 0.08),
         )
 
     def _set_freejoint(
