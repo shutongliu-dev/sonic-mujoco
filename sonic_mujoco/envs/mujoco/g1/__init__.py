@@ -1,3 +1,4 @@
+from .basket_loading_env import BasketLoadingState, MujocoG1BasketLoadingEnv
 from .bucket_carry_env import BucketCarryState, MujocoG1BucketCarryEnv
 from .chair_lean_env import ChairLeanState, MujocoG1ChairLeanEnv
 from .door_elbow_env import DoorElbowState, MujocoG1DoorElbowEnv
@@ -9,9 +10,11 @@ from .sweep_env import MujocoG1SweepEnv, SweepState
 
 __all__ = [
     "SONIC_JOINT_NAMES",
+    "BasketLoadingState",
     "BucketCarryState",
     "ChairLeanState",
     "DoorElbowState",
+    "MujocoG1BasketLoadingEnv",
     "MujocoG1BucketCarryEnv",
     "MujocoG1ChairLeanEnv",
     "MujocoG1DoorElbowEnv",

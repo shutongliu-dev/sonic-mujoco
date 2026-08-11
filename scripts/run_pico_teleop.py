@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sonic_mujoco.controllers.sonic import SonicController, SonicEncoder
 from sonic_mujoco.envs.mujoco.g1 import (
+    MujocoG1BasketLoadingEnv,
     MujocoG1BucketCarryEnv,
     MujocoG1ChairLeanEnv,
     MujocoG1DoorElbowEnv,
@@ -64,6 +65,7 @@ def parse_args() -> argparse.Namespace:
             "sweep",
             "chair_lean",
             "door_elbow",
+            "basket_loading",
             "bucket_carry",
             "plush_carry",
         ),
@@ -84,6 +86,7 @@ def main() -> None:
         "sweep": MujocoG1SweepEnv,
         "chair_lean": MujocoG1ChairLeanEnv,
         "door_elbow": MujocoG1DoorElbowEnv,
+        "basket_loading": MujocoG1BasketLoadingEnv,
         "bucket_carry": MujocoG1BucketCarryEnv,
         "plush_carry": MujocoG1PlushCarryEnv,
     }
@@ -193,9 +196,14 @@ def main() -> None:
                     _finish_recording(recorder)
                 elif mode is TeleopMode.POSE:
                     recorder.start()
+                    if isinstance(env, MujocoG1BasketLoadingEnv):
+                        env.start_loading()
                     print("Recording started.")
                 else:
                     print("Enter POSE mode before starting a recording.")
+
+            if recorder.active and isinstance(env, MujocoG1BasketLoadingEnv):
+                env.advance_loading(recorder.duration_seconds)
 
             if mode is TeleopMode.POSE and not controls.menu:
                 try:

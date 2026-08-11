@@ -109,6 +109,17 @@ Bucket carry 场景也使用相同操作流程：
   --pico-device TestDevice
 ```
 
+动态装载与重心感知场景使用：
+
+```bash
+.venv/bin/python scripts/run_pico_teleop.py \
+  --scene basket_loading \
+  --pico-device TestDevice
+```
+
+录制开始后，六件质量、摩擦和装载顺序随机的物体会每隔 5 秒依次装入篮筐，
+用于产生逐步增载、左右偏载和重心迁移。场景 reset 会同步恢复空篮筐与待装物体。
+
 柔性玩偶搬运场景使用：
 
 ```bash

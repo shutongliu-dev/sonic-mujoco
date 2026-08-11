@@ -23,6 +23,9 @@ DEFAULT_TASKS = {
         "and gently lean back against the backrest."
     ),
     "door_elbow": "Open the door using your elbow and shoulder.",
+    "basket_loading": (
+        "Hold the basket steady while objects are progressively loaded into it."
+    ),
     "bucket_carry": (
         "Carry the container to the designated area while holding it securely "
         "against your torso."
