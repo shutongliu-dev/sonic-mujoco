@@ -56,6 +56,12 @@ class ContactRecorder:
     def begin(self) -> None:
         self._pairs.clear()
 
+    def reset(self) -> None:
+        """Discard the active interval and the previously finished frame."""
+
+        self.begin()
+        self.last_frame = self._empty_frame()
+
     def update(self, data: mujoco.MjData) -> None:
         force = np.zeros(6, dtype=np.float64)
         step_pairs: dict[tuple[int, int], _ContactValue] = {}

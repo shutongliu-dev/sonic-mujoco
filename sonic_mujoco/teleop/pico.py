@@ -4,6 +4,8 @@ from math import prod
 import numpy as np
 
 from .base import TeleopBase, TeleopCommand
+from .dexhand import DexHandRetargeter
+from .neck import neck_joint_targets
 
 HEADER_SIZE = 1280
 TOPIC = b"pose"
@@ -80,12 +82,35 @@ def decode_pose_message(message: bytes) -> TeleopCommand:
     heading_increment = values.get("heading_increment", np.zeros(1))
     if heading_increment.shape != (1,):
         raise ValueError("heading_increment must have shape (1,)")
+    hand_joint_position = values.get("hand_joint_pos")
+    if hand_joint_position is None:
+        left_hand = values.get("left_hand_joints")
+        right_hand = values.get("right_hand_joints")
+        if left_hand is not None or right_hand is not None:
+            if left_hand is None or right_hand is None:
+                raise ValueError(
+                    "left_hand_joints and right_hand_joints must be provided together"
+                )
+            if left_hand.shape[0] != frames or right_hand.shape[0] != frames:
+                raise ValueError("hand tracking batch must match frame_index")
+            retargeter = DexHandRetargeter(low_pass_alpha=1.0)
+            hand_joint_position = np.stack(
+                [
+                    retargeter.retarget(left, right)
+                    for left, right in zip(left_hand, right_hand)
+                ]
+            )
+    neck_joint_position = values.get("neck_joint_pos")
+    if neck_joint_position is None:
+        neck_joint_position = neck_joint_targets(values["smpl_pose"])
     return TeleopCommand(
         frame_index=frame_index,
         smpl_joints=values["smpl_joints"],
         root_quaternion=root_quaternion,
         joint_position=values["joint_pos"],
         heading_increment=float(heading_increment[0]),
+        hand_joint_position=hand_joint_position,
+        neck_joint_position=neck_joint_position,
     )
 
 

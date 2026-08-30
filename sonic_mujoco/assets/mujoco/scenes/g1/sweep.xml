@@ -76,7 +76,7 @@
         size="0.40 0.33 0.002" rgba="0 0 0 0"/>
     </body>
 
-    <body name="sweep_cup" pos="0.87 -0.18 0.772">
+    <body name="sweep_cup" pos="0.50 -0.03 0.772">
       <freejoint name="sweep_cup_joint"/>
       <geom name="sweep_cup_collision" class="sweep_object" type="mesh"
         mesh="sweep_cup_mesh" mass="0.035" friction="0.42 0.006 0.0005"

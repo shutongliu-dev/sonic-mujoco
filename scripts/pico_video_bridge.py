@@ -140,7 +140,7 @@ class VideoBridge:
         pipeline_text = (
             f"appsrc name=source is-live=true format=time do-timestamp=true "
             f"caps=video/x-raw,format=RGB,width={source_width},height={source_height},"
-            f"framerate={config.fps}/1 ! videoconvert ! videoscale ! "
+            f"framerate={config.fps}/1 ! videoconvert ! videoscale add-borders=true ! "
             f"video/x-raw,format=I420,width={config.width},height={config.height} ! "
             f"x{codec}enc tune=zerolatency speed-preset=ultrafast key-int-max=15 "
             f"bitrate={bitrate} ! h{codec}parse config-interval=1 ! "
@@ -191,7 +191,9 @@ class VideoBridge:
             payload = bytes(mapping.data)
             with self._lock:
                 if self._video_socket is not None:
-                    self._video_socket.sendall(struct.pack(">I", len(payload)) + payload)
+                    self._video_socket.sendall(
+                        struct.pack(">I", len(payload)) + payload
+                    )
         except OSError as error:
             print(f"PICO video connection closed: {error}", flush=True)
             self.GLib.idle_add(self._close)

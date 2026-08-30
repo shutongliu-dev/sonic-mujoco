@@ -29,6 +29,8 @@ class TeleopCommand:
     root_quaternion: Array
     joint_position: Array
     heading_increment: float = 0.0
+    hand_joint_position: Array | None = None
+    neck_joint_position: Array | None = None
 
     def __post_init__(self) -> None:
         frame_index = np.asarray(self.frame_index, dtype=np.int64)
@@ -54,6 +56,26 @@ class TeleopCommand:
             "joint_position",
             _array("joint_position", self.joint_position, (frames, 29)),
         )
+        if self.hand_joint_position is not None:
+            object.__setattr__(
+                self,
+                "hand_joint_position",
+                _array(
+                    "hand_joint_position",
+                    self.hand_joint_position,
+                    (frames, 40),
+                ),
+            )
+        if self.neck_joint_position is not None:
+            object.__setattr__(
+                self,
+                "neck_joint_position",
+                _array(
+                    "neck_joint_position",
+                    self.neck_joint_position,
+                    (frames, 2),
+                ),
+            )
         heading_increment = float(self.heading_increment)
         if not np.isfinite(heading_increment):
             raise ValueError("heading_increment must be finite")

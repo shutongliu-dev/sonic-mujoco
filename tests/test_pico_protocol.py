@@ -49,7 +49,28 @@ class PicoProtocolTest(unittest.TestCase):
         np.testing.assert_allclose(command.smpl_joints, fields["smpl_joints"])
         np.testing.assert_allclose(command.root_quaternion, fields["body_quat_w"])
         np.testing.assert_allclose(command.joint_position, fields["joint_pos"])
+        np.testing.assert_array_equal(command.neck_joint_position, 0.0)
         self.assertAlmostEqual(command.heading_increment, 0.1, places=6)
+
+    def test_decodes_explicit_neck_targets(self) -> None:
+        fields = pose_fields()
+        fields["neck_joint_pos"] = np.linspace(-0.2, 0.3, 10).reshape(5, 2)
+
+        command = decode_pose_message(pack_pose(fields))
+
+        np.testing.assert_allclose(
+            command.neck_joint_position, fields["neck_joint_pos"]
+        )
+
+    def test_decodes_optional_hand_targets(self) -> None:
+        fields = pose_fields()
+        fields["hand_joint_pos"] = np.arange(200, dtype=np.float32).reshape(5, 40)
+
+        command = decode_pose_message(pack_pose(fields))
+
+        np.testing.assert_allclose(
+            command.hand_joint_position, fields["hand_joint_pos"]
+        )
 
     def test_rejects_wrong_protocol_version(self) -> None:
         with self.assertRaisesRegex(ValueError, "protocol v3"):

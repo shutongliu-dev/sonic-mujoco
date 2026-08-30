@@ -11,10 +11,11 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .base import TeleopBase, TeleopCommand
+from .dexhand import DexHandRetargeter, dexhand_controller_targets
+from .neck import neck_joint_targets
 
 PICO_PARENTS = np.array(
-    [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14,
-     16, 17, 18, 19, 20, 22],
+    [-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 22],
     dtype=np.int32,
 )
 SMPL_OUTPUT_JOINTS = np.r_[0:22, 39, 54]
@@ -87,7 +88,9 @@ class PicoPoseConverter:
         local_rotations = [global_rotations[0]]
         for index in range(1, 24):
             parent = PICO_PARENTS[index]
-            local_rotations.append(global_rotations[parent].inv() * global_rotations[index])
+            local_rotations.append(
+                global_rotations[parent].inv() * global_rotations[index]
+            )
         local_pose = np.stack([rotation.as_rotvec() for rotation in local_rotations])
 
         pose = local_pose[1:22]
@@ -142,7 +145,11 @@ def load_xrobotoolkit(sdk_dir: Path | None = None):
 
     if sdk_dir is None:
         configured = os.environ.get("SONIC_XR_SDK_DIR")
-        sdk_dir = Path(configured) if configured else Path(__file__).parents[2] / ".xrobotoolkit"
+        sdk_dir = (
+            Path(configured)
+            if configured
+            else Path(__file__).parents[2] / ".xrobotoolkit"
+        )
     libraries = list((sdk_dir / "lib").glob("libPXREARobotSDK.so"))
     bindings = list(sdk_dir.glob("xrobotoolkit_sdk*.so"))
     if not libraries or not bindings:
@@ -166,6 +173,7 @@ class PicoTeleop(TeleopBase):
         start_service: bool = True,
         target_fps: int = 50,
         buffer_size: int = 5,
+        enable_dexhand: bool = True,
     ) -> None:
         if start_service:
             subprocess.Popen(
@@ -177,17 +185,21 @@ class PicoTeleop(TeleopBase):
         self._sdk = sdk or load_xrobotoolkit()
         self._sdk.init()
         self._converter = PicoPoseConverter()
+        self._hand_retargeter = DexHandRetargeter()
+        self._enable_dexhand = bool(enable_dexhand)
         self._step_ns = int(1e9 / target_fps)
         self._frames: deque[tuple[int, _PoseFrame]] = deque(maxlen=buffer_size)
         self._previous: tuple[int, _PoseFrame] | None = None
         self._next_target_ns: int | None = None
         self._frame_index = 0
+        self._headset_pose: np.ndarray | None = None
         self.controls = PicoControls()
         self._events = PicoEvents()
         self._previous_combos = (False, False, False, False, False)
 
     def read(self) -> TeleopCommand | None:
         self._update_controls()
+        self._update_headset_pose()
         if not self._sdk.is_body_data_available():
             return None
         timestamp = int(self._sdk.get_time_stamp_ns())
@@ -205,7 +217,9 @@ class PicoTeleop(TeleopBase):
         if target is None or target > timestamp:
             return None
         target = max(target, previous_timestamp)
-        alpha = np.clip((target - previous_timestamp) / (timestamp - previous_timestamp), 0.0, 1.0)
+        alpha = np.clip(
+            (target - previous_timestamp) / (timestamp - previous_timestamp), 0.0, 1.0
+        )
         frame = _PoseFrame(
             pose=_lerp_pose(previous.pose, current.pose, alpha),
             joints=(1.0 - alpha) * previous.joints + alpha * current.joints,
@@ -224,10 +238,64 @@ class PicoTeleop(TeleopBase):
         return TeleopCommand(
             frame_index=np.array([item[0] for item in self._frames]),
             smpl_joints=np.stack([item[1].joints for item in self._frames]),
-            root_quaternion=np.stack([item[1].root_quaternion for item in self._frames]),
-            joint_position=np.stack([_wrist_joints(item[1].pose) for item in self._frames]),
+            root_quaternion=np.stack(
+                [item[1].root_quaternion for item in self._frames]
+            ),
+            joint_position=np.stack(
+                [_wrist_joints(item[1].pose) for item in self._frames]
+            ),
             heading_increment=heading,
+            hand_joint_position=(
+                np.repeat(self._hand_target()[None], len(self._frames), axis=0)
+                if self._enable_dexhand
+                else None
+            ),
+            neck_joint_position=neck_joint_targets(
+                np.stack([item[1].pose for item in self._frames])
+            ),
         )
+
+    @property
+    def headset_pose(self) -> np.ndarray | None:
+        """Latest valid headset pose as ``x, y, z, qx, qy, qz, qw``."""
+
+        return None if self._headset_pose is None else self._headset_pose.copy()
+
+    def _update_headset_pose(self) -> None:
+        value = self._call("get_headset_pose", None)
+        if value is None:
+            return
+        pose = np.asarray(value, dtype=np.float64).copy()
+        if pose.shape != (7,) or not np.isfinite(pose).all():
+            return
+        quaternion_norm = np.linalg.norm(pose[3:])
+        if quaternion_norm < 1e-8:
+            return
+        pose[3:] /= quaternion_norm
+        self._headset_pose = pose
+
+    def _hand_target(self) -> np.ndarray:
+        target = dexhand_controller_targets(
+            self.controls.left_trigger,
+            self.controls.left_grip,
+            self.controls.right_trigger,
+            self.controls.right_grip,
+        )
+        for side, offset in (("left", 0), ("right", 20)):
+            if not bool(self._call(f"get_{side}_hand_is_active", 0)):
+                continue
+            tracking = self._call(f"get_{side}_hand_tracking_state", None)
+            if tracking is None:
+                continue
+            try:
+                target[offset : offset + 20] = self._hand_retargeter.retarget_hand(
+                    np.asarray(tracking), side
+                )
+            except ValueError:
+                # Optical tracking can briefly return an all-zero skeleton
+                # while changing between controllers and bare-hand mode.
+                continue
+        return target
 
     def pop_events(self) -> PicoEvents:
         events = self._events

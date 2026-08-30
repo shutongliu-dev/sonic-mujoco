@@ -32,6 +32,25 @@ class ContactRecorderTest(unittest.TestCase):
         self.assertEqual(frame.count, 0)
         self.assertTrue(np.all(frame.robot_body_id == -1))
 
+    def test_reset_clears_contact_and_tactile_history(self) -> None:
+        hand_body = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_BODY, "right_wrist_yaw_link"
+        )
+        object_joint = mujoco.mj_name2id(
+            self.env.model, mujoco.mjtObj.mjOBJ_JOINT, "sweep_object_0_joint"
+        )
+        address = self.env.model.jnt_qposadr[object_joint]
+        self.env.data.qpos[address : address + 3] = self.env.data.xpos[hand_body]
+        mujoco.mj_forward(self.env.model, self.env.data)
+        self.env.step(zero_command(), steps=2)
+        self.assertGreater(self.env.contacts.last_frame.count, 0)
+
+        self.env.reset(seed=0)
+
+        self.assertEqual(self.env.contacts.last_frame.count, 0)
+        self.assertFalse(np.any(self.env.tactile.last_frame.contact))
+        self.assertFalse(np.any(self.env.tactile_suit.values))
+
     def test_robot_object_contact_is_accumulated(self) -> None:
         hand_body = mujoco.mj_name2id(
             self.env.model, mujoco.mjtObj.mjOBJ_BODY, "right_wrist_yaw_link"
@@ -64,9 +83,7 @@ class ContactRecorderTest(unittest.TestCase):
             plush_env.model, mujoco.mjtObj.mjOBJ_JOINT, "carry_plush_joint"
         )
         address = plush_env.model.jnt_qposadr[plush_joint]
-        plush_env.data.qpos[address : address + 3] = plush_env.data.xpos[
-            hand_body
-        ]
+        plush_env.data.qpos[address : address + 3] = plush_env.data.xpos[hand_body]
         mujoco.mj_forward(plush_env.model, plush_env.data)
 
         plush_env.step(zero_command(), steps=2)

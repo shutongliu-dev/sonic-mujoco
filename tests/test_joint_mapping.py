@@ -10,8 +10,7 @@ class JointMappingTest(unittest.TestCase):
 
         self.assertEqual(len(set(env.joint_ids)), len(SONIC_JOINT_NAMES))
         self.assertEqual(len(set(env.actuator_ids)), len(SONIC_JOINT_NAMES))
-        self.assertEqual(env.actuator_ids[:3], (0, 1, 2))
-        self.assertEqual(env.actuator_ids[22:29], tuple(range(29, 36)))
+        self.assertEqual(env.actuator_ids, tuple(range(29)))
 
 
 if __name__ == "__main__":

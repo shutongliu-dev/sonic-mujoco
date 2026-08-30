@@ -2,6 +2,7 @@ import html
 import json
 import shutil
 from collections import Counter
+from dataclasses import dataclass
 from datetime import datetime
 from fractions import Fraction
 from pathlib import Path
@@ -9,6 +10,13 @@ from pathlib import Path
 import numpy as np
 
 from .contact import MAX_CONTACTS, ContactFrame
+from .tactile import TactileFrame
+from .tactile_skin import (
+    TACTILE_DEVICE_DIM,
+    TACTILE_DEVICE_NAMES,
+    JuQiaoSkinLayout,
+    JuQiaoTactileFrame,
+)
 from .teleop.base import TeleopCommand
 from .teleop.pico_direct import PicoControls
 
@@ -36,12 +44,104 @@ DEFAULT_TASKS = {
     ),
 }
 
+_CONTACT_FIELDS = (
+    "robot_body_id",
+    "other_body_id",
+    "position",
+    "normal_force",
+    "tangent_force",
+    "normal_impulse",
+    "sample_count",
+    "count",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _TactileField:
+    name: str
+    key: str
+    attribute: str
+    dtype: type[np.generic]
+
+
+_TACTILE_FIELDS = (
+    _TactileField("physical_force", "force_body_n", "force", np.float32),
+    _TactileField(
+        "physical_normal_force", "normal_force_n", "normal_force", np.float32
+    ),
+    _TactileField(
+        "physical_tangent_force",
+        "tangent_force_body_n",
+        "tangent_force",
+        np.float32,
+    ),
+    _TactileField("physical_impulse", "impulse_body_ns", "impulse", np.float32),
+    _TactileField(
+        "physical_normal_impulse",
+        "normal_impulse_ns",
+        "normal_impulse",
+        np.float32,
+    ),
+    _TactileField(
+        "physical_tangent_impulse",
+        "tangent_impulse_body_ns",
+        "tangent_impulse",
+        np.float32,
+    ),
+    _TactileField("contact", "contact", "contact", np.bool_),
+    _TactileField("other_body_id", "other_body_id", "other_body_id", np.int32),
+    _TactileField("other_geom_id", "other_geom_id", "other_geom_id", np.int32),
+    _TactileField("sample_count", "sample_count", "sample_count", np.int32),
+)
+
+
+def _fit_video_frame(
+    image: np.ndarray,
+    *,
+    width: int = 640,
+    height: int = 480,
+) -> np.ndarray:
+    """Resize and letterbox RGB without changing the camera aspect ratio."""
+
+    source = np.asarray(image, dtype=np.uint8)
+    if source.ndim != 3 or source.shape[2] != 3 or min(source.shape[:2]) < 1:
+        raise ValueError("recorded video frame must have shape (height, width, 3)")
+    if source.shape == (height, width, 3):
+        return np.ascontiguousarray(source)
+    scale = min(width / source.shape[1], height / source.shape[0])
+    resized_width = max(1, round(source.shape[1] * scale))
+    resized_height = max(1, round(source.shape[0] * scale))
+    x_index = np.minimum(
+        (np.arange(resized_width) * source.shape[1] / resized_width).astype(int),
+        source.shape[1] - 1,
+    )
+    y_index = np.minimum(
+        (np.arange(resized_height) * source.shape[0] / resized_height).astype(int),
+        source.shape[0] - 1,
+    )
+    resized = source[y_index[:, None], x_index[None, :]]
+    output = np.zeros((height, width, 3), dtype=np.uint8)
+    x_offset = (width - resized_width) // 2
+    y_offset = (height - resized_height) // 2
+    output[
+        y_offset : y_offset + resized_height,
+        x_offset : x_offset + resized_width,
+    ] = resized
+    return output
+
 
 class _VideoWriter:
-    def __init__(self, path: Path, model, data, fps: int) -> None:
+    def __init__(
+        self,
+        path: Path,
+        model,
+        data,
+        fps: int,
+        *,
+        render_fallback: bool,
+    ) -> None:
         try:
             import av
-            import mujoco
         except ImportError as exc:
             raise RuntimeError(
                 "video recording requires: uv sync --extra recording"
@@ -50,7 +150,15 @@ class _VideoWriter:
         path.parent.mkdir(parents=True, exist_ok=True)
         self._av = av
         self._data = data
-        self._renderer = mujoco.Renderer(model, height=480, width=640)
+        self._renderer = None
+        if render_fallback:
+            try:
+                import mujoco
+            except ImportError as exc:
+                raise RuntimeError(
+                    "video recording requires: uv sync --extra recording"
+                ) from exc
+            self._renderer = mujoco.Renderer(model, height=480, width=640)
         self._container = av.open(str(path), mode="w")
         self._stream = self._container.add_stream("libx264", rate=fps)
         self._stream.width = 640
@@ -60,11 +168,14 @@ class _VideoWriter:
         self._time_base = Fraction(1, fps)
         self._frame_index = 0
 
-    def add_frame(self) -> None:
-        self._renderer.update_scene(self._data, camera="head_camera")
-        frame = self._av.VideoFrame.from_ndarray(
-            self._renderer.render(), format="rgb24"
-        )
+    def add_frame(self, image: np.ndarray | None = None) -> None:
+        if image is None:
+            if self._renderer is None:
+                raise RuntimeError("an external RGB frame is required")
+            self._renderer.update_scene(self._data, camera="head_camera")
+            image = self._renderer.render()
+        image = _fit_video_frame(image)
+        frame = self._av.VideoFrame.from_ndarray(image, format="rgb24")
         frame.pts = self._frame_index
         frame.time_base = self._time_base
         for packet in self._stream.encode(frame):
@@ -75,11 +186,13 @@ class _VideoWriter:
         for packet in self._stream.encode():
             self._container.mux(packet)
         self._container.close()
-        self._renderer.close()
+        if self._renderer is not None:
+            self._renderer.close()
 
     def cancel(self, path: Path) -> None:
         self._container.close()
-        self._renderer.close()
+        if self._renderer is not None:
+            self._renderer.close()
         path.unlink(missing_ok=True)
 
 
@@ -97,6 +210,10 @@ class EpisodeRecorder:
         fps: int = 50,
         task: str | None = None,
         record_video: bool = True,
+        video_source: str = "mujoco_head_camera",
+        video_metadata: dict | None = None,
+        tactile_layout: JuQiaoSkinLayout | None = None,
+        tactile_metadata: dict | None = None,
     ) -> None:
         if record_video and (model is None or data is None):
             raise ValueError("model and data are required for video recording")
@@ -108,6 +225,17 @@ class EpisodeRecorder:
         self.fps = fps
         self.task = task or DEFAULT_TASKS.get(scene, scene)
         self.record_video = record_video
+        self.video_source = video_source
+        self.video_metadata = dict(video_metadata or {})
+        self.tactile_layout = tactile_layout
+        self.tactile_metadata = dict(tactile_metadata or {})
+        tactile_record_rate = self.tactile_metadata.get("record_rate_hz")
+        if (
+            tactile_layout is not None
+            and tactile_record_rate is not None
+            and not np.isclose(float(tactile_record_rate), fps)
+        ):
+            raise ValueError("tactile record rate must match episode fps")
         self._frames: list[dict[str, np.ndarray | float | int]] = []
         self._session: Path | None = None
         self._video: _VideoWriter | None = None
@@ -146,36 +274,72 @@ class EpisodeRecorder:
         action: np.ndarray,
         controls: PicoControls,
         contacts: ContactFrame,
+        tactile: TactileFrame | None = None,
+        tactile_suit: JuQiaoTactileFrame | None = None,
+        video_frame: np.ndarray | None = None,
+        camera_pose: np.ndarray | None = None,
+        appearance_camera_pose: np.ndarray | None = None,
     ) -> None:
         if not self.active:
             return
+        if (
+            self.record_video
+            and self.video_source == "reconstructed_scene_composite"
+            and video_frame is None
+        ):
+            raise RuntimeError(
+                "reconstructed-scene recording requires a composite RGB frame"
+            )
+        if self.tactile_layout is not None and (
+            tactile is None or tactile_suit is None
+        ):
+            raise RuntimeError("tactile recording requires physical and suit frames")
+        if self.tactile_layout is None and (
+            tactile is not None or tactile_suit is not None
+        ):
+            raise RuntimeError("tactile frames require a configured tactile layout")
         self._ensure_episode_started()
-        self._frames.append(
-            {
-                "observation.qpos": np.asarray(qpos).copy(),
-                "observation.qvel": np.asarray(qvel).copy(),
-                "action.ctrl": np.asarray(ctrl).copy(),
-                "teleop.smpl_joints": command.smpl_joints[-1].reshape(-1).copy(),
-                "teleop.body_quat_w": command.root_quaternion[-1].copy(),
-                "teleop.reference_joint_position": (
-                    command.joint_position[-1].copy()
-                ),
-                "action.motion_token": np.asarray(token).copy(),
-                "action.policy": np.asarray(action).copy(),
-                "teleop.pico_input": self._pico_input(controls),
-                "observation.contact.robot_body_id": contacts.robot_body_id.copy(),
-                "observation.contact.other_body_id": contacts.other_body_id.copy(),
-                "observation.contact.position": contacts.position.reshape(-1).copy(),
-                "observation.contact.normal_force": contacts.normal_force.copy(),
-                "observation.contact.tangent_force": contacts.tangent_force.copy(),
-                "observation.contact.normal_impulse": contacts.normal_impulse.copy(),
-                "observation.contact.sample_count": contacts.sample_count.copy(),
-                "observation.contact.count": int(contacts.count),
-                "sim_time": float(time),
-            }
-        )
+        frame = {
+            "observation.qpos": np.asarray(qpos).copy(),
+            "observation.qvel": np.asarray(qvel).copy(),
+            "action.ctrl": np.asarray(ctrl).copy(),
+            "teleop.smpl_joints": command.smpl_joints[-1].reshape(-1).copy(),
+            "teleop.body_quat_w": command.root_quaternion[-1].copy(),
+            "teleop.reference_joint_position": command.joint_position[-1].copy(),
+            "teleop.hand_joint_position": (
+                command.hand_joint_position[-1].copy()
+                if command.hand_joint_position is not None
+                else np.zeros(40, dtype=np.float64)
+            ),
+            "teleop.neck_joint_position": (
+                command.neck_joint_position[-1].copy()
+                if command.neck_joint_position is not None
+                else np.zeros(2, dtype=np.float64)
+            ),
+            "action.motion_token": np.asarray(token).copy(),
+            "action.policy": np.asarray(action).copy(),
+            "teleop.pico_input": self._pico_input(controls),
+            "observation.contact.robot_body_id": contacts.robot_body_id.copy(),
+            "observation.contact.other_body_id": contacts.other_body_id.copy(),
+            "observation.contact.position": contacts.position.reshape(-1).copy(),
+            "observation.contact.normal_force": contacts.normal_force.copy(),
+            "observation.contact.tangent_force": contacts.tangent_force.copy(),
+            "observation.contact.normal_impulse": contacts.normal_impulse.copy(),
+            "observation.contact.sample_count": contacts.sample_count.copy(),
+            "observation.contact.count": int(contacts.count),
+            "sim_time": float(time),
+        }
+        if camera_pose is not None:
+            frame["observation.camera_pose"] = np.asarray(camera_pose).copy()
+        if appearance_camera_pose is not None:
+            frame["observation.appearance_camera_pose"] = np.asarray(
+                appearance_camera_pose
+            ).copy()
+        if tactile is not None and tactile_suit is not None:
+            self._append_tactile(frame, tactile, tactile_suit)
+        self._frames.append(frame)
         if self._video is not None:
-            self._video.add_frame()
+            self._video.add_frame(video_frame)
 
     def finish(self) -> Path | None:
         if not self.active:
@@ -230,7 +394,11 @@ class EpisodeRecorder:
                 "videos/chunk-000/observation.images.ego_view", index, "mp4"
             )
             self._video = _VideoWriter(
-                self._video_path, self.model, self.data, self.fps
+                self._video_path,
+                self.model,
+                self.data,
+                self.fps,
+                render_fallback=self.video_source == "mujoco_head_camera",
             )
 
     def _new_session_directory(self) -> Path:
@@ -309,10 +477,16 @@ class EpisodeRecorder:
             }
         for key, values in arrays.items():
             shape = list(values.shape[1:]) or [1]
+            names = (
+                [f"raw_{index:03d}" for index in range(1, TACTILE_DEVICE_DIM + 1)]
+                if key
+                in {f"observation.tactile_{name}" for name in TACTILE_DEVICE_NAMES}
+                else None
+            )
             features[key] = {
                 "dtype": str(values.dtype),
                 "shape": shape,
-                "names": None,
+                "names": names,
             }
         return features
 
@@ -320,6 +494,12 @@ class EpisodeRecorder:
         assert self._session is not None and self._features is not None
         meta = self._session / "meta"
         meta.mkdir(parents=True, exist_ok=True)
+        if self.tactile_layout is not None:
+            layout = self.tactile_layout.as_dict(include_taxels=True)
+            layout["sha256"] = self.tactile_layout.sha256
+            (meta / "tactile_layout.json").write_text(
+                json.dumps(layout, indent=2, ensure_ascii=False) + "\n"
+            )
         total_frames = sum(item["length"] for item in self._episodes)
         info = {
             "codebase_version": "v2.1",
@@ -333,8 +513,7 @@ class EpisodeRecorder:
             "fps": self.fps,
             "splits": {"train": f"0:{len(self._episodes)}"},
             "data_path": (
-                "data/chunk-{episode_chunk:03d}/"
-                "episode_{episode_index:06d}.parquet"
+                "data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet"
             ),
             "video_path": (
                 "videos/chunk-{episode_chunk:03d}/{video_key}/"
@@ -343,9 +522,28 @@ class EpisodeRecorder:
             "features": self._features,
             "script_config": {
                 "scene": self.scene,
+                "video_source": self.video_source,
+                "video_metadata": self.video_metadata,
                 "contact_source": "mujoco",
                 "max_contacts_per_frame": MAX_CONTACTS,
                 "contact_body_names": list(self.body_names),
+                "tactile": (
+                    {
+                        **self.tactile_metadata,
+                        "layout_sha256": self.tactile_layout.sha256,
+                        "physical_units": {
+                            "force": "N",
+                            "impulse": "N*s",
+                            "frame": "owning_mujoco_body_local",
+                        },
+                        "hardware_compatible_fields": [
+                            f"observation.tactile_{name}"
+                            for name in TACTILE_DEVICE_NAMES
+                        ],
+                    }
+                    if self.tactile_layout is not None
+                    else None
+                ),
             },
             "discarded_episode_indices": [],
         }
@@ -363,37 +561,47 @@ class EpisodeRecorder:
                 "policy": {"original_key": "action.policy"},
             },
             "video": (
-                {
-                    "ego_view": {
-                        "original_key": "observation.images.ego_view"
-                    }
-                }
+                {"ego_view": {"original_key": "observation.images.ego_view"}}
                 if self.record_video
                 else {}
             ),
-            "annotation": {
-                "human.task_description": {"original_key": "task_index"}
-            },
+            "annotation": {"human.task_description": {"original_key": "task_index"}},
             "contact": {
                 name: {"original_key": f"observation.contact.{name}"}
-                for name in (
-                    "robot_body_id",
-                    "other_body_id",
-                    "position",
-                    "normal_force",
-                    "tangent_force",
-                    "normal_impulse",
-                    "sample_count",
-                    "count",
-                )
+                for name in _CONTACT_FIELDS
             },
+            "tactile": (
+                {
+                    name: {"original_key": f"observation.tactile_{name}"}
+                    for name in TACTILE_DEVICE_NAMES
+                }
+                if self.tactile_layout is not None
+                else {}
+            ),
+            "simulation_tactile": (
+                {
+                    **{
+                        field.name: {"original_key": f"observation.tactile.{field.key}"}
+                        for field in _TACTILE_FIELDS
+                    },
+                    "duration": {"original_key": "observation.tactile.duration_s"},
+                    "mapped_contact_count": {
+                        "original_key": "observation.tactile.mapped_contact_count"
+                    },
+                    "unmapped_contact_count": {
+                        "original_key": "observation.tactile.unmapped_contact_count"
+                    },
+                    "source_time": {"original_key": "simulation.tactile_source_time"},
+                    "updated": {"original_key": "simulation.tactile_updated"},
+                }
+                if self.tactile_layout is not None
+                else {}
+            ),
         }
         (meta / "modality.json").write_text(
             json.dumps(modality, indent=2, ensure_ascii=False) + "\n"
         )
-        self._write_jsonl(
-            meta / "tasks.jsonl", [{"task_index": 0, "task": self.task}]
-        )
+        self._write_jsonl(meta / "tasks.jsonl", [{"task_index": 0, "task": self.task}])
         self._write_jsonl(meta / "episodes.jsonl", self._episodes)
         self._write_jsonl(meta / "episodes_stats.jsonl", self._stats)
 
@@ -470,6 +678,41 @@ class EpisodeRecorder:
             return self.body_names[body_id]
         return f"body_{body_id}"
 
+    def _append_tactile(
+        self,
+        output: dict[str, np.ndarray | float | int],
+        tactile: TactileFrame,
+        suit: JuQiaoTactileFrame,
+    ) -> None:
+        assert self.tactile_layout is not None
+        expected = len(self.tactile_layout.taxels)
+        if tactile.normal_force.shape != (
+            expected,
+        ) or not self.tactile_layout.matches_taxels(tactile.layout):
+            raise ValueError("physical tactile frame does not match layout")
+        if suit.values.shape != (len(TACTILE_DEVICE_NAMES), TACTILE_DEVICE_DIM):
+            raise ValueError("hardware tactile frame must have shape (3, 256)")
+        for index, name in enumerate(TACTILE_DEVICE_NAMES):
+            output[f"observation.tactile_{name}"] = suit.values[index].copy()
+        for field in _TACTILE_FIELDS:
+            value = getattr(tactile, field.attribute)
+            output[f"observation.tactile.{field.key}"] = np.asarray(
+                value, dtype=field.dtype
+            ).copy()
+        output.update(
+            {
+                "observation.tactile.duration_s": float(tactile.duration),
+                "observation.tactile.mapped_contact_count": int(
+                    tactile.mapped_contact_count
+                ),
+                "observation.tactile.unmapped_contact_count": int(
+                    tactile.unmapped_contact_count
+                ),
+                "simulation.tactile_source_time": suit.source_time.copy(),
+                "simulation.tactile_updated": suit.updated.copy(),
+            }
+        )
+
     def _preview_html(self, episode_index: int, stem: str, summary: dict) -> str:
         rows = "".join(
             "<tr>"
@@ -495,8 +738,8 @@ table{{border-collapse:collapse;width:100%}}
 td,th{{padding:8px;border-bottom:1px solid #334155}}
 </style></head><body><main>
 <h1>Episode {episode_index:06d}</h1>
-<p>{summary['frames']} frames · {summary['duration_sec']:.2f} s ·
-{summary['contact_frames']} interaction-contact frames</p>
+<p>{summary["frames"]} frames · {summary["duration_sec"]:.2f} s ·
+{summary["contact_frames"]} interaction-contact frames</p>
 {video}
 <img src="{stem}.svg" alt="MuJoCo contact force timeline">
 <h2>Top contact pairs</h2>
@@ -505,9 +748,7 @@ td,th{{padding:8px;border-bottom:1px solid #334155}}
 """
 
     @staticmethod
-    def _contact_svg(
-        normal: np.ndarray, counts: np.ndarray, summary: dict
-    ) -> str:
+    def _contact_svg(normal: np.ndarray, counts: np.ndarray, summary: dict) -> str:
         width, height = 1000, 420
         left, top, plot_width, plot_height = 70, 70, 880, 230
         maximum = max(float(np.max(normal)), 1e-6)
@@ -524,13 +765,14 @@ td,th{{padding:8px;border-bottom:1px solid #334155}}
             for i, count in enumerate(counts)
             if count > 0
         )
-        pair_text = " · ".join(
-            f"{item['robot_body']} → {item['other_body']}"
-            for item in summary["top_contact_pairs"][:3]
-        ) or "no robot-scene contact"
-        title = html.escape(
-            f"Episode {summary['episode_index']:06d} MuJoCo contact"
+        pair_text = (
+            " · ".join(
+                f"{item['robot_body']} → {item['other_body']}"
+                for item in summary["top_contact_pairs"][:3]
+            )
+            or "no robot-scene contact"
         )
+        title = html.escape(f"Episode {summary['episode_index']:06d} MuJoCo contact")
         pair_text = html.escape(pair_text)
         summary_text = (
             f"frames={summary['frames']}  "

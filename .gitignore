@@ -1,7 +1,17 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+.pytest_cache/
+.ruff_cache/
+build/
 .venv/
+.venv-superdex/
+.superdex/
+MUJOCO_LOG.TXT
+mochi_debugger_imgui.ini
 .xrobotoolkit/
 models/
 records/
+results/
+sonic_mujoco/assets/reconstruction/*.json
+sonic_mujoco/assets/reconstruction/meshes/

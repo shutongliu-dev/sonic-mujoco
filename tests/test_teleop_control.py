@@ -1,13 +1,19 @@
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import pyarrow.parquet as pq
 
+from scripts.run_pico_teleop import _append_recording
 from sonic_mujoco.contact import MAX_CONTACTS, ContactFrame
-from sonic_mujoco.recording import EpisodeRecorder
+from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv
+from sonic_mujoco.recording import EpisodeRecorder, _fit_video_frame
+from sonic_mujoco.tactile import TaxelLayout
 from sonic_mujoco.teleop import (
     PicoControls,
     PicoEvents,
@@ -15,6 +21,7 @@ from sonic_mujoco.teleop import (
     TeleopMode,
     next_mode,
 )
+from sonic_mujoco.teleop.pico_video import RenderedCameraFrame
 
 
 def command() -> TeleopCommand:
@@ -45,7 +52,12 @@ def contacts() -> ContactFrame:
     )
 
 
-def append_frame(recorder: EpisodeRecorder) -> None:
+def append_frame(
+    recorder: EpisodeRecorder,
+    video_frame: np.ndarray | None = None,
+    camera_pose: np.ndarray | None = None,
+    appearance_camera_pose: np.ndarray | None = None,
+) -> None:
     recorder.append(
         time=0.02,
         qpos=np.arange(40),
@@ -56,10 +68,23 @@ def append_frame(recorder: EpisodeRecorder) -> None:
         action=np.arange(29),
         controls=PicoControls(left_grip=0.8, a=True),
         contacts=contacts(),
+        video_frame=video_frame,
+        camera_pose=camera_pose,
+        appearance_camera_pose=appearance_camera_pose,
     )
 
 
 class TeleopControlTest(unittest.TestCase):
+    def test_video_letterbox_preserves_widescreen_aspect(self) -> None:
+        frame = np.full((720, 1280, 3), 127, dtype=np.uint8)
+
+        fitted = _fit_video_frame(frame)
+
+        self.assertEqual(fitted.shape, (480, 640, 3))
+        self.assertTrue(np.all(fitted[60:420] == 127))
+        self.assertTrue(np.all(fitted[:60] == 0))
+        self.assertTrue(np.all(fitted[420:] == 0))
+
     def test_start_and_pose_combinations_follow_the_real_robot_flow(self) -> None:
         mode = next_mode(TeleopMode.OFF, PicoEvents(start_stop=True))
         self.assertIs(mode, TeleopMode.READY)
@@ -118,6 +143,213 @@ class TeleopControlTest(unittest.TestCase):
 
             self.assertFalse(recorder.active)
             self.assertEqual(list(Path(directory).iterdir()), [])
+
+    def test_recorder_writes_supplied_reconstructed_scene_frame(self) -> None:
+        frame = np.full((480, 640, 3), (23, 71, 149), dtype=np.uint8)
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("sonic_mujoco.recording._VideoWriter") as writer_class,
+        ):
+            recorder = EpisodeRecorder(
+                directory,
+                "lab_scan",
+                model=object(),
+                data=object(),
+                video_source="reconstructed_scene_composite",
+                video_metadata={"renderer": "mujoco_3dgs_depth_composite"},
+            )
+            recorder.start()
+            camera_pose = np.eye(4)
+            appearance_camera_pose = np.eye(4)
+            appearance_camera_pose[0, 3] = 1.25
+            append_frame(
+                recorder,
+                frame,
+                camera_pose,
+                appearance_camera_pose,
+            )
+            path = recorder.finish()
+
+            written = writer_class.return_value.add_frame.call_args.args[0]
+            np.testing.assert_array_equal(written, frame)
+            assert path is not None
+            info = json.loads((path.parents[2] / "meta/info.json").read_text())
+            self.assertEqual(
+                info["script_config"]["video_source"],
+                "reconstructed_scene_composite",
+            )
+            self.assertEqual(
+                info["script_config"]["video_metadata"]["renderer"],
+                "mujoco_3dgs_depth_composite",
+            )
+            table = pq.read_table(path)
+            self.assertIn("observation.camera_pose", table.column_names)
+            self.assertIn("observation.appearance_camera_pose", table.column_names)
+
+    def test_reconstructed_scene_recording_rejects_missing_rgb_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = EpisodeRecorder(
+                directory,
+                "lab_scan",
+                model=object(),
+                data=object(),
+                video_source="reconstructed_scene_composite",
+            )
+            recorder.start()
+
+            with self.assertRaisesRegex(RuntimeError, "composite RGB frame"):
+                append_frame(recorder)
+
+    def test_recorder_preserves_real_tactile_schema_and_physical_sidecar(
+        self,
+    ) -> None:
+        env = MujocoG1EmptyEnv()
+        self.addCleanup(env.close)
+        env.reset()
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = EpisodeRecorder(
+                directory,
+                "empty",
+                body_names=env.contacts.body_names,
+                record_video=False,
+                tactile_layout=env.tactile_skin_layout,
+                tactile_metadata=env.tactile_adapter.metadata,
+            )
+            recorder.start()
+            recorder.append(
+                time=env.time,
+                qpos=env.data.qpos,
+                qvel=env.data.qvel,
+                ctrl=env.data.ctrl,
+                command=command(),
+                token=np.arange(64),
+                action=np.arange(29),
+                controls=PicoControls(),
+                contacts=env.contacts.last_frame,
+                tactile=env.tactile.last_frame,
+                tactile_suit=env.tactile_suit,
+            )
+            path = recorder.finish()
+
+            assert path is not None
+            table = pq.read_table(path)
+            for device in ("vest", "left_arm", "right_arm"):
+                key = f"observation.tactile_{device}"
+                self.assertIn(key, table.column_names)
+                self.assertEqual(len(table[key][0].as_py()), 256)
+            self.assertIn("observation.tactile.normal_force_n", table.column_names)
+            self.assertIn(
+                "observation.tactile.tangent_force_body_n", table.column_names
+            )
+            self.assertIn("observation.tactile.other_geom_id", table.column_names)
+            self.assertEqual(
+                len(table["observation.tactile.normal_force_n"][0].as_py()),
+                624,
+            )
+            session = path.parents[2]
+            layout = json.loads((session / "meta/tactile_layout.json").read_text())
+            info = json.loads((session / "meta/info.json").read_text())
+            modality = json.loads((session / "meta/modality.json").read_text())
+            self.assertEqual(layout["wired_taxels"], 624)
+            self.assertEqual(
+                layout["sha256"], info["script_config"]["tactile"]["layout_sha256"]
+            )
+            self.assertEqual(
+                modality["tactile"]["vest"]["original_key"],
+                "observation.tactile_vest",
+            )
+            self.assertEqual(
+                set(modality["tactile"]), {"vest", "left_arm", "right_arm"}
+            )
+            self.assertIn("physical_force", modality["simulation_tactile"])
+            self.assertEqual(
+                info["features"]["observation.tactile_vest"]["names"],
+                [f"raw_{index:03d}" for index in range(1, 257)],
+            )
+
+            with self.assertRaisesRegex(ValueError, "record rate"):
+                EpisodeRecorder(
+                    directory,
+                    "empty",
+                    fps=25,
+                    record_video=False,
+                    tactile_layout=env.tactile_skin_layout,
+                    tactile_metadata=env.tactile_adapter.metadata,
+                )
+
+            bad_layout = TaxelLayout(
+                body_id=env.tactile.last_frame.layout.body_id.copy(),
+                geom_id=env.tactile.last_frame.layout.geom_id.copy(),
+                local_center=env.tactile.last_frame.layout.local_center.copy(),
+                local_normal=env.tactile.last_frame.layout.local_normal.copy(),
+                region_id=env.tactile.last_frame.layout.region_id.copy(),
+                channel_id=np.roll(
+                    env.tactile.last_frame.layout.channel_id.copy(),
+                    1,
+                ),
+                region_names=env.tactile.last_frame.layout.region_names,
+            )
+            recorder.start()
+            with self.assertRaisesRegex(ValueError, "does not match layout"):
+                recorder.append(
+                    time=env.time,
+                    qpos=env.data.qpos,
+                    qvel=env.data.qvel,
+                    ctrl=env.data.ctrl,
+                    command=command(),
+                    token=np.arange(64),
+                    action=np.arange(29),
+                    controls=PicoControls(),
+                    contacts=env.contacts.last_frame,
+                    tactile=replace(env.tactile.last_frame, layout=bad_layout),
+                    tactile_suit=env.tactile_suit,
+                )
+
+    def test_video_throttle_holds_rgb_without_dropping_tactile_rows(self) -> None:
+        env = MujocoG1EmptyEnv()
+        self.addCleanup(env.close)
+        env.reset()
+        rendered = RenderedCameraFrame(
+            rgb=np.zeros((480, 640, 3), dtype=np.uint8),
+            camera_to_world=np.eye(4),
+            appearance_camera_to_world=np.eye(4),
+        )
+        video = SimpleNamespace(
+            render=lambda **_: None,
+            latest_rendered=rendered,
+        )
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("sonic_mujoco.recording._VideoWriter"),
+        ):
+            recorder = EpisodeRecorder(
+                directory,
+                "lab_scan",
+                model=env.model,
+                data=env.data,
+                video_source="reconstructed_scene_composite",
+                tactile_layout=env.tactile_skin_layout,
+                tactile_metadata=env.tactile_adapter.metadata,
+            )
+            recorder.start()
+            for _ in range(2):
+                _append_recording(
+                    recorder,
+                    env,
+                    command(),
+                    np.arange(64),
+                    np.arange(29),
+                    PicoControls(),
+                    video,
+                )
+
+            self.assertEqual(recorder.frame_count, 2)
+            self.assertEqual(recorder._frames[0]["sim_time"], env.time)
+            np.testing.assert_array_equal(
+                recorder._frames[0]["observation.tactile_vest"],
+                env.tactile_suit.values[0],
+            )
+            recorder.abort()
 
 
 if __name__ == "__main__":

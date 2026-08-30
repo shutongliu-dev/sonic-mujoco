@@ -20,6 +20,9 @@
     <default class="finger_motor">
       <joint damping="0.05" armature="0.01" frictionloss="0.1"/>
     </default>
+    <default class="neck_motor">
+      <joint damping="0.04" armature="0.002" frictionloss="0.02"/>
+    </default>
   </default>
   <asset>
     <mesh name="pelvis" file="pelvis.STL" />
@@ -75,6 +78,10 @@
   </asset>
 
   <worldbody>
+    <body name="vr_view" mocap="true">
+      <camera name="vr_camera_left" pos="-0.032 0 0" fovy="60" />
+      <camera name="vr_camera_right" pos="0.032 0 0" fovy="60" />
+    </body>
     <body name="pelvis" pos="0 0 0.793">
       <inertial pos="0 0 -0.07605" quat="1 0 -0.000399148 0" mass="3.813"
         diaginertia="0.010549 0.0093089 0.0079184" />
@@ -222,7 +229,6 @@
           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1"
             mesh="waist_roll_link" />
           <body name="torso_link" pos="0 0 0.019">
-            <camera name="head_camera" pos="0.06 0.0 0.45" euler="0 -0.8 -1.57"/>
             <inertial pos="0.00331658 0.000261533 0.179856"
               quat="0.999831 0.000376204 0.0179895 -0.00377704" mass="9.598"
               diaginertia="0.12407 0.111951 0.0325382" />
@@ -235,9 +241,27 @@
               group="1" density="0" rgba="0.2 0.2 0.2 1" mesh="logo_link" />
             <geom pos="0.0039635 0 -0.054" quat="1 0 0 0" type="mesh" rgba="0.2 0.2 0.2 1"
               mesh="logo_link" />
-            <geom pos="0.0039635 0 -0.054" type="mesh" contype="0" conaffinity="0" group="1"
-              density="0" rgba="0.2 0.2 0.2 1" mesh="head_link" />
-            <geom pos="0.0039635 0 -0.054" type="mesh" rgba="0.2 0.2 0.2 1" mesh="head_link" />
+            <camera name="vr_camera_base" pos="0.06 0 0.45" fovy="60"
+              euler="0 -1.5708 -1.57" />
+            <body name="head_link" pos="0.0039635 0 0.271">
+              <inertial pos="0 0 0.102" mass="0.05"
+                diaginertia="0.00022 0.00020 0.00012" />
+              <joint name="neck_yaw_joint" axis="0 0 1" range="-1.2 1.2"
+                actuatorfrcrange="-4 4" class="neck_motor" />
+              <joint name="neck_pitch_joint" axis="0 1 0" range="-0.45 0.55"
+                actuatorfrcrange="-4 4" class="neck_motor" />
+              <camera name="head_camera" pos="0.0560365 0 0.179" euler="0 -0.8 -1.57"/>
+              <camera name="head_camera_scan" pos="0.0560365 0 0.179"
+                euler="0 -1.5708 -1.57"/>
+              <camera name="head_camera_left" pos="0.0560365 0.03 0.179"
+                euler="0 -0.8 -1.57"/>
+              <camera name="head_camera_right" pos="0.0560365 -0.03 0.179"
+                euler="0 -0.8 -1.57"/>
+              <geom pos="0 0 -0.325" type="mesh" contype="0" conaffinity="0" group="1"
+                density="0" rgba="0.2 0.2 0.2 1" mesh="head_link" />
+              <geom pos="0 0 -0.325" type="mesh" density="0"
+                rgba="0.2 0.2 0.2 1" mesh="head_link" />
+            </body>
             <geom pos="0.0039635 0 -0.054" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0"
               group="1" density="0" rgba="0.7 0.7 0.7 1" mesh="waist_support_link" />
             <geom pos="0.0039635 0 -0.054" quat="1 0 0 0" type="mesh" rgba="0.7 0.7 0.7 1"
@@ -309,6 +333,7 @@
                           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0"
                             rgba="0.7 0.7 0.7 1" mesh="left_wrist_yaw_link" />
                           <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="left_wrist_yaw_link" />
+                          <!-- Legacy three-finger Dex3-1 geometry retained for provenance.
                           <geom pos="0.0415 0.003 0" quat="1 0 0 0" type="mesh" contype="0"
                             conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1"
                             mesh="left_hand_palm_link" />
@@ -387,6 +412,8 @@
                               <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="left_hand_index_1_link" />
                             </body>
                           </body>
+                          -->
+                          <include file="dexhand_left.xml" />
                         </body>
                       </body>
                     </body>
@@ -460,6 +487,7 @@
                           <geom type="mesh" contype="0" conaffinity="0" group="1" density="0"
                             rgba="0.7 0.7 0.7 1" mesh="right_wrist_yaw_link" />
                           <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="right_wrist_yaw_link" />
+                          <!-- Legacy three-finger Dex3-1 geometry retained for provenance.
                           <geom pos="0.0415 -0.003 0" quat="1 0 0 0" type="mesh" contype="0"
                             conaffinity="0" group="1" density="0" rgba="0.7 0.7 0.7 1"
                             mesh="right_hand_palm_link" />
@@ -540,6 +568,8 @@
                               <geom type="mesh" rgba="0.7 0.7 0.7 1" mesh="right_hand_index_1_link" />
                             </body>
                           </body>
+                          -->
+                          <include file="dexhand_right.xml" />
                         </body>
                       </body>
                     </body>
@@ -580,6 +610,7 @@
     <motor name="left_wrist_pitch" joint="left_wrist_pitch_joint" ctrlrange="-5 5" />
     <motor name="left_wrist_yaw" joint="left_wrist_yaw_joint" ctrlrange="-5 5" />
 
+    <!-- Legacy Dex3-1 actuators.
     <motor name="left_hand_thumb_0" joint="left_hand_thumb_0_joint" ctrlrange="-2.45 2.45" />
     <motor name="left_hand_thumb_1" joint="left_hand_thumb_1_joint" ctrlrange="-1.4 1.4" />
     <motor name="left_hand_thumb_2" joint="left_hand_thumb_2_joint" ctrlrange="-1.4 1.4" />
@@ -587,7 +618,7 @@
     <motor name="left_hand_middle_1" joint="left_hand_middle_1_joint" ctrlrange="-1.4 1.4" />
     <motor name="left_hand_index_0" joint="left_hand_index_0_joint" ctrlrange="-1.4 1.4" />
     <motor name="left_hand_index_1" joint="left_hand_index_1_joint" ctrlrange="-1.4 1.4" />
-
+    -->
     <motor name="right_shoulder_pitch" joint="right_shoulder_pitch_joint" ctrlrange="-25 25" />
     <motor name="right_shoulder_roll" joint="right_shoulder_roll_joint" ctrlrange="-25 25" />
     <motor name="right_shoulder_yaw" joint="right_shoulder_yaw_joint" ctrlrange="-25 25" />
@@ -596,6 +627,12 @@
     <motor name="right_wrist_pitch" joint="right_wrist_pitch_joint" ctrlrange="-5 5" />
     <motor name="right_wrist_yaw" joint="right_wrist_yaw_joint" ctrlrange="-5 5" />
 
+    <motor name="neck_yaw" joint="neck_yaw_joint" ctrlrange="-4 4" />
+    <motor name="neck_pitch" joint="neck_pitch_joint" ctrlrange="-4 4" />
+
+    <include file="dexhand_actuators.xml" />
+
+    <!-- Legacy Dex3-1 actuators.
     <motor name="right_hand_thumb_0" joint="right_hand_thumb_0_joint" ctrlrange="-2.45 2.45" />
     <motor name="right_hand_thumb_1" joint="right_hand_thumb_1_joint" ctrlrange="-1.4 1.4" />
     <motor name="right_hand_thumb_2" joint="right_hand_thumb_2_joint" ctrlrange="-1.4 1.4" />
@@ -603,6 +640,7 @@
     <motor name="right_hand_middle_1" joint="right_hand_middle_1_joint" ctrlrange="-1.4 1.4" />
     <motor name="right_hand_index_0" joint="right_hand_index_0_joint" ctrlrange="-1.4 1.4" />
     <motor name="right_hand_index_1" joint="right_hand_index_1_joint" ctrlrange="-1.4 1.4" />
+    -->
   </actuator>
 
   <sensor>
@@ -635,7 +673,10 @@
     <jointpos name="right_wrist_roll_pos" joint="right_wrist_roll_joint" />
     <jointpos name="right_wrist_pitch_pos" joint="right_wrist_pitch_joint" />
     <jointpos name="right_wrist_yaw_pos" joint="right_wrist_yaw_joint" />
+    <jointpos name="neck_yaw_pos" joint="neck_yaw_joint" />
+    <jointpos name="neck_pitch_pos" joint="neck_pitch_joint" />
 
+    <!-- Legacy Dex3-1 hand sensors.
     <jointpos name="left_hand_thumb_0_pos" joint="left_hand_thumb_0_joint" />
     <jointpos name="left_hand_thumb_1_pos" joint="left_hand_thumb_1_joint" />
     <jointpos name="left_hand_thumb_2_pos" joint="left_hand_thumb_2_joint" />
@@ -650,6 +691,7 @@
     <jointpos name="right_hand_middle_1_pos" joint="right_hand_middle_1_joint" />
     <jointpos name="right_hand_index_0_pos" joint="right_hand_index_0_joint" />
     <jointpos name="right_hand_index_1_pos" joint="right_hand_index_1_joint" />
+    -->
 
     <jointvel name="left_hip_pitch_vel" joint="left_hip_pitch_joint" />
     <jointvel name="left_hip_roll_vel" joint="left_hip_roll_joint" />
@@ -680,7 +722,10 @@
     <jointvel name="right_wrist_roll_vel" joint="right_wrist_roll_joint" />
     <jointvel name="right_wrist_pitch_vel" joint="right_wrist_pitch_joint" />
     <jointvel name="right_wrist_yaw_vel" joint="right_wrist_yaw_joint" />
+    <jointvel name="neck_yaw_vel" joint="neck_yaw_joint" />
+    <jointvel name="neck_pitch_vel" joint="neck_pitch_joint" />
 
+    <!-- Legacy Dex3-1 hand sensors.
     <jointvel name="left_hand_thumb_0_vel" joint="left_hand_thumb_0_joint" />
     <jointvel name="left_hand_thumb_1_vel" joint="left_hand_thumb_1_joint" />
     <jointvel name="left_hand_thumb_2_vel" joint="left_hand_thumb_2_joint" />
@@ -695,6 +740,7 @@
     <jointvel name="right_hand_middle_1_vel" joint="right_hand_middle_1_joint" />
     <jointvel name="right_hand_index_0_vel" joint="right_hand_index_0_joint" />
     <jointvel name="right_hand_index_1_vel" joint="right_hand_index_1_joint" />
+    -->
 
     <jointactuatorfrc name="left_hip_pitch_torque" joint="left_hip_pitch_joint" />
     <jointactuatorfrc name="left_hip_roll_torque" joint="left_hip_roll_joint" />
@@ -725,7 +771,10 @@
     <jointactuatorfrc name="right_wrist_roll_torque" joint="right_wrist_roll_joint" />
     <jointactuatorfrc name="right_wrist_pitch_torque" joint="right_wrist_pitch_joint" />
     <jointactuatorfrc name="right_wrist_yaw_torque" joint="right_wrist_yaw_joint" />
+    <jointactuatorfrc name="neck_yaw_torque" joint="neck_yaw_joint" />
+    <jointactuatorfrc name="neck_pitch_torque" joint="neck_pitch_joint" />
 
+    <!-- Legacy Dex3-1 hand sensors.
     <jointactuatorfrc name="left_hand_thumb_0_torque" joint="left_hand_thumb_0_joint" />
     <jointactuatorfrc name="left_hand_thumb_1_torque" joint="left_hand_thumb_1_joint" />
     <jointactuatorfrc name="left_hand_thumb_2_torque" joint="left_hand_thumb_2_joint" />
@@ -740,6 +789,7 @@
     <jointactuatorfrc name="right_hand_middle_1_torque" joint="right_hand_middle_1_joint" />
     <jointactuatorfrc name="right_hand_index_0_torque" joint="right_hand_index_0_joint" />
     <jointactuatorfrc name="right_hand_index_1_torque" joint="right_hand_index_1_joint" />
+    -->
 
     <framequat name="imu_quat" objtype="site" objname="imu" />
     <gyro name="imu_gyro" site="imu" />

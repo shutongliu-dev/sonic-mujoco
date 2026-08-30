@@ -8,9 +8,15 @@ import mujoco.viewer
 class MujocoEnvBase:
     """Own a MuJoCo model, data, and optional passive viewer."""
 
-    def __init__(self, xml_path: str | Path, timestep: float = 0.005) -> None:
+    def __init__(
+        self,
+        xml_path: str | Path,
+        timestep: float = 0.005,
+        *,
+        model: mujoco.MjModel | None = None,
+    ) -> None:
         self.xml_path = Path(xml_path).resolve()
-        self.model = mujoco.MjModel.from_xml_path(str(self.xml_path))
+        self.model = model or mujoco.MjModel.from_xml_path(str(self.xml_path))
         self.model.opt.timestep = timestep
         self.data = mujoco.MjData(self.model)
         self._viewer = None

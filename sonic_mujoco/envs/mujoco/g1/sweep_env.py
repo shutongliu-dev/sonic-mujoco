@@ -16,7 +16,7 @@ OBJECT_NAMES = (
 )
 SPAWN_POSITIONS = np.array(
     [
-        [0.87, -0.18, 0.772],
+        [0.50, -0.03, 0.772],
         [0.87, -0.36, 0.772],
         [0.62, -0.12, 0.772],
         [0.75, -0.39, 0.772],
@@ -51,9 +51,7 @@ class MujocoG1SweepEnv(MujocoG1Env):
         self._target_site_id = self._site_id("sweep_target")
         self._physics_body_ids = np.r_[self._table_body_id, self._object_body_ids]
         self._base_body_mass = self.model.body_mass[self._physics_body_ids].copy()
-        self._base_body_inertia = self.model.body_inertia[
-            self._physics_body_ids
-        ].copy()
+        self._base_body_inertia = self.model.body_inertia[self._physics_body_ids].copy()
         self._physics_geom_ids = np.flatnonzero(
             np.isin(self.model.geom_bodyid, self._physics_body_ids)
             & (self.model.geom_contype != 0)
@@ -69,9 +67,7 @@ class MujocoG1SweepEnv(MujocoG1Env):
         positions = SPAWN_POSITIONS.copy()
         positions[:, :2] += rng.uniform(-0.02, 0.02, (len(OBJECT_NAMES), 2))
         yaws = SPAWN_YAWS + rng.uniform(-0.08, 0.08, len(OBJECT_NAMES))
-        for address, position, yaw in zip(
-            self._object_qpos_addresses, positions, yaws
-        ):
+        for address, position, yaw in zip(self._object_qpos_addresses, positions, yaws):
             self.data.qpos[address : address + 3] = position
             self.data.qpos[address + 3 : address + 7] = (
                 np.cos(yaw / 2),
@@ -96,17 +92,13 @@ class MujocoG1SweepEnv(MujocoG1Env):
         rotation = self.data.site_xmat[self._target_site_id].reshape(3, 3)
         local_position = (position - center) @ rotation
         inside_xy = np.abs(local_position[:, :2]) <= half_size[:2]
-        on_table = (local_position[:, 2] >= -0.02) & (
-            local_position[:, 2] <= 0.14
-        )
+        on_table = (local_position[:, 2] >= -0.02) & (local_position[:, 2] <= 0.14)
         return bool(np.all(inside_xy) and np.all(on_table))
 
     def _randomize_physics(self, rng: np.random.Generator) -> None:
         mass_scale = rng.uniform(0.9, 1.1, len(self._physics_body_ids))
         mass_scale[0] = rng.uniform(0.97, 1.03)
-        self.model.body_mass[self._physics_body_ids] = (
-            self._base_body_mass * mass_scale
-        )
+        self.model.body_mass[self._physics_body_ids] = self._base_body_mass * mass_scale
         self.model.body_inertia[self._physics_body_ids] = (
             self._base_body_inertia * mass_scale[:, None]
         )
