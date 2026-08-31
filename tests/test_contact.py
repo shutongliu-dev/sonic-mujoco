@@ -1,4 +1,5 @@
 import unittest
+from dataclasses import replace
 
 import mujoco
 import numpy as np
@@ -69,6 +70,61 @@ class ContactRecorderTest(unittest.TestCase):
         self.assertGreater(frame.count, 0)
         self.assertTrue(np.any(frame.other_body_id[active] > 0))
         self.assertGreater(frame.normal_impulse[active].sum(), 0.0)
+
+    def test_control_interval_or_merges_substep_tactile_updates(self) -> None:
+        profile = replace(
+            self.env.tactile_adapter.profile,
+            schema_version=2,
+            profile_id="test-causal-v2",
+        )
+        self.env.configure_tactile_profile(profile, seed=0)
+        substep_updates = []
+        update_normal_force = self.env.tactile_adapter.update_normal_force
+
+        def track_update(normal_force: np.ndarray, time: float):
+            frame = update_normal_force(normal_force, time)
+            substep_updates.append(frame.updated.copy())
+            return frame
+
+        self.env.tactile_adapter.update_normal_force = track_update
+        self.env.step(zero_command(), steps=2)
+
+        self.assertEqual(len(substep_updates), 2)
+        self.assertTrue(substep_updates[0][0])
+        self.assertFalse(substep_updates[1][0])
+        np.testing.assert_array_equal(
+            self.env.tactile_suit.updated,
+            np.logical_or.reduce(substep_updates),
+        )
+        np.testing.assert_array_equal(
+            self.env.tactile_adapter.last_frame.updated,
+            self.env.tactile_suit.updated,
+        )
+        self.assertAlmostEqual(
+            self.env.tactile.last_frame.duration,
+            2.0 * self.env.timestep,
+        )
+
+    def test_v1_tactile_profile_keeps_control_interval_adapter_path(self) -> None:
+        interval_updates = []
+        substep_updates = []
+        update = self.env.tactile_adapter.update
+        update_normal_force = self.env.tactile_adapter.update_normal_force
+
+        def track_interval(frame, time: float):
+            interval_updates.append((frame.duration, time))
+            return update(frame, time)
+
+        def track_substep(normal_force: np.ndarray, time: float):
+            substep_updates.append(time)
+            return update_normal_force(normal_force, time)
+
+        self.env.tactile_adapter.update = track_interval
+        self.env.tactile_adapter.update_normal_force = track_substep
+        self.env.step(zero_command(), steps=2)
+
+        self.assertEqual(interval_updates, [(2.0 * self.env.timestep, self.env.time)])
+        self.assertFalse(substep_updates)
 
     def test_robot_flex_contact_is_accumulated(self) -> None:
         plush_env = MujocoG1PlushCarryEnv()

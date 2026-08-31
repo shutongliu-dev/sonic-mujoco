@@ -478,13 +478,14 @@ class TactileForceTest(unittest.TestCase):
             spacing=0.10,
         )
         expected_impulse = np.zeros(3)
+        step_normal_force = []
         recorder.begin()
         for _ in range(3):
             mujoco.mj_step(model, data)
             expected_impulse += (
                 robot_force(model, data, robot_geom) * model.opt.timestep
             )
-            recorder.update(data)
+            step_normal_force.append(recorder.update(data))
         frame = recorder.finish()
 
         np.testing.assert_allclose(
@@ -498,6 +499,16 @@ class TactileForceTest(unittest.TestCase):
         )
         self.assertAlmostEqual(frame.duration, 3.0 * model.opt.timestep)
         self.assertTrue(np.all(frame.sample_count[frame.contact] == 3))
+        np.testing.assert_allclose(
+            frame.normal_force,
+            np.mean(step_normal_force, axis=0),
+            rtol=1e-12,
+            atol=1e-12,
+        )
+        np.testing.assert_array_equal(
+            recorder.step_normal_force,
+            step_normal_force[-1],
+        )
 
     def test_unselected_robot_contact_is_reported_as_unmapped(self) -> None:
         model = mujoco.MjModel.from_xml_string(

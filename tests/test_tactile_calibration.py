@@ -12,6 +12,9 @@ from sonic_mujoco.tactile_calibration import (
     TactileCalibrationProfile,
     TactileDeviceProfile,
     TactileEpisodeRandomization,
+    TactileObservationDeliveryProfile,
+    TactileProfileSampler,
+    TactileSensorDynamicsProfile,
     TactileTransferProfile,
     UniformRange,
     asymmetric_first_order_filter,
@@ -114,9 +117,11 @@ def _profile(
     randomization: TactileEpisodeRandomization | None = None,
     fixed_gain_variation: float = 0.0,
     fixed_rate_variation: float = 0.0,
+    schema_version: int = 1,
 ) -> TactileCalibrationProfile:
     return TactileCalibrationProfile(
-        profile_id="test-provisional-v1",
+        schema_version=schema_version,
+        profile_id=f"test-provisional-v{schema_version}",
         layout_sha256=skin.sha256,
         transfer=transfer or TactileTransferProfile(),
         devices=devices or _devices(),
@@ -157,6 +162,10 @@ class TactileCalibrationProfileTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "valid UTF-8 JSON"):
                 TactileCalibrationProfile.from_file(path)
 
+            path.write_text('{"schema_version": 1, "schema_version": 2}')
+            with self.assertRaisesRegex(ValueError, "valid UTF-8 JSON"):
+                TactileCalibrationProfile.from_file(path)
+
         unknown = dict(payload)
         unknown["unexpected"] = True
         with self.assertRaisesRegex(ValueError, "unknown fields"):
@@ -187,6 +196,51 @@ class TactileCalibrationProfileTest(unittest.TestCase):
                 randomization=TactileEpisodeRandomization(
                     sample_rate_scale=UniformRange(1.0, 1e308)
                 ),
+            )
+
+    def test_v2_sensor_dynamics_are_strict_and_seeded(self) -> None:
+        dynamics = TactileSensorDynamicsProfile(
+            spatial_first_ring_fraction=UniformRange(0.10, 0.20),
+            spatial_second_ring_fraction=UniformRange(0.01, 0.04),
+            randomize_source_phase=True,
+            noise_ar1_rho=UniformRange(0.10, 0.30),
+            drift_std_counts=UniformRange(0.4, 0.9),
+            drift_time_constant_s=UniformRange(15.0, 60.0),
+            observation_delivery=TactileObservationDeliveryProfile(
+                initial_probabilities=(0.2, 0.8),
+                transition_probabilities=((0.7, 0.3), (0.2, 0.8)),
+            ),
+        )
+        profile = TactileCalibrationProfile(
+            schema_version=2,
+            profile_id="test-provisional-v2",
+            layout_sha256=self.skin.sha256,
+            devices=_devices(),
+            sensor_dynamics=dynamics,
+        )
+
+        parsed = TactileCalibrationProfile.from_dict(profile.as_dict())
+        self.assertEqual(parsed.as_dict(), profile.as_dict())
+        first, _ = TactileProfileSampler(profile, len(self.skin.taxels)).sample(seed=42)
+        replay, _ = TactileProfileSampler(profile, len(self.skin.taxels)).sample(
+            seed=42
+        )
+        self.assertEqual(first.sha256, replay.sha256)
+        np.testing.assert_array_equal(first.source_phase_s, replay.source_phase_s)
+        self.assertTrue(np.all(first.source_phase_s >= 0.0))
+        self.assertTrue(np.all(first.source_phase_s < 1.0 / 14.0))
+        self.assertGreaterEqual(first.spatial_first_ring_fraction, 0.10)
+        self.assertLessEqual(first.spatial_first_ring_fraction, 0.20)
+
+        unknown = profile.as_dict()
+        unknown["sensor_dynamics"]["unknown"] = True
+        with self.assertRaisesRegex(ValueError, "unknown fields"):
+            TactileCalibrationProfile.from_dict(unknown)
+
+        with self.assertRaisesRegex(ValueError, "sum to <= 1"):
+            TactileSensorDynamicsProfile(
+                spatial_first_ring_fraction=UniformRange(0.8, 0.8),
+                spatial_second_ring_fraction=UniformRange(0.3, 0.3),
             )
 
     def test_pressure_input_uses_taxel_area_without_mutating_force(self) -> None:
@@ -379,6 +433,97 @@ class TactileCalibrationProfileTest(unittest.TestCase):
 
         np.testing.assert_array_equal(coarse_sample.values, fine_sample.values)
         np.testing.assert_allclose(coarse_sample.source_time, fine_sample.source_time)
+
+    def test_default_v1_constant_input_bitstream_is_unchanged(self) -> None:
+        adapter = JuQiaoTactileAdapter(self.skin, seed=0)
+        frame = _frame(
+            self.skin.taxels,
+            np.full(len(self.skin.taxels), 11.0),
+        )
+        packets = []
+
+        for time in np.arange(0.0, 0.301, 0.02):
+            packets.append(adapter.update(frame, float(time)).values.tobytes())
+
+        self.assertEqual(
+            hashlib.sha256(b"".join(packets)).hexdigest(),
+            "dd1c72d46da79b68814581646126eb185d753cfe047c4df91589436f2727adc6",
+        )
+
+    def test_force_step_cannot_reach_an_earlier_device_sample(self) -> None:
+        profile = _profile(
+            self.skin,
+            schema_version=2,
+            transfer=TactileTransferProfile(gain=1.0),
+            devices=_devices(
+                rates=(10.0, 10.0, 10.0),
+                phases=(0.015, 100.0, 100.0),
+            ),
+        )
+        adapter = JuQiaoTactileAdapter(self.skin, profile=profile, seed=5)
+        zero = np.zeros(len(self.skin.taxels))
+        force = np.full(len(self.skin.taxels), 10.0)
+
+        adapter.update_normal_force(zero, 0.01)
+        before_step = adapter.update_normal_force(force, 0.02)
+
+        self.assertTrue(before_step.updated[0])
+        self.assertEqual(before_step.source_time[0], 0.015)
+        self.assertFalse(np.any(before_step.values[0]))
+
+        after_step = adapter.update_normal_force(force, 0.12)
+        self.assertEqual(after_step.source_time[0], 0.115)
+        self.assertTrue(np.all(after_step.values[0, :112] == 10))
+
+    def test_constant_causal_trajectory_is_bit_exact_across_batching(self) -> None:
+        profile = _profile(
+            self.skin,
+            schema_version=2,
+            transfer=TactileTransferProfile(gain=1.0, attack_tau_s=0.1),
+            devices=_devices(
+                rates=(13.0, 14.0, 15.0),
+                dropout=(0.2, 0.2, 0.2),
+                noise=(0.5, 0.5, 0.5),
+                phases=(0.01, 0.02, 0.03),
+            ),
+        )
+        force = np.full(len(self.skin.taxels), 10.0)
+        coarse = JuQiaoTactileAdapter(self.skin, profile=profile, seed=11)
+        fine = JuQiaoTactileAdapter(self.skin, profile=profile, seed=11)
+
+        coarse_updated = coarse.update_normal_force(force, 0.0).updated.copy()
+        coarse_sample = coarse.update_normal_force(force, 0.3)
+        coarse_updated |= coarse_sample.updated
+        coarse_sample = coarse.snapshot(updated=coarse_updated)
+
+        fine_updated = fine.update_normal_force(force, 0.0).updated.copy()
+        for time in np.arange(0.01, 0.301, 0.01):
+            fine_sample = fine.update_normal_force(force, float(time))
+            fine_updated |= fine_sample.updated
+        fine_sample = fine.snapshot(updated=fine_updated)
+
+        np.testing.assert_array_equal(coarse_sample.values, fine_sample.values)
+        np.testing.assert_array_equal(
+            coarse_sample.source_time,
+            fine_sample.source_time,
+        )
+        np.testing.assert_array_equal(coarse_sample.updated, fine_sample.updated)
+
+    def test_history_or_merges_device_updates(self) -> None:
+        profile = _profile(
+            self.skin,
+            schema_version=2,
+            devices=_devices(
+                rates=(10.0, 10.0, 10.0),
+                phases=(0.005, 0.015, 100.0),
+            ),
+        )
+        adapter = JuQiaoTactileAdapter(self.skin, profile=profile, seed=2)
+        force = np.zeros(len(self.skin.taxels))
+
+        sample = adapter.update_normal_force_history(((0.01, force), (0.02, force)))
+
+        np.testing.assert_array_equal(sample.updated, (True, True, False))
 
     def test_excessive_sample_backlog_is_rejected(self) -> None:
         profile = _profile(

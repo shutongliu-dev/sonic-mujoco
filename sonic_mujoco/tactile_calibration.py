@@ -19,8 +19,10 @@ from typing import Literal
 
 import numpy as np
 
-TACTILE_CALIBRATION_PROFILE_VERSION = 1
+TACTILE_CALIBRATION_PROFILE_VERSION = 2
+_SUPPORTED_PROFILE_VERSIONS = frozenset({1, 2})
 FORCE_MAPPING_STATUS = "provisional_unpaired_force_mapping"
+SENSOR_DYNAMICS_STATUS = "provisional_unpaired_sensor_dynamics"
 _PROFILE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _UINT64_MAX = np.iinfo(np.uint64).max
@@ -211,6 +213,114 @@ class TactileEpisodeRandomization:
 
 
 @dataclass(frozen=True, slots=True)
+class TactileObservationDeliveryProfile:
+    """50 Hz observation-layer delivery cadence measured from robot data.
+
+    The states are hold lengths of one through five recorded rows. This models
+    the legacy publisher/exporter delivery pattern, not the physical sensing
+    rate. Source acquisition remains an independent clock.
+    """
+
+    record_rate_hz: float = 50.0
+    initial_probabilities: tuple[float, ...] = (0.0, 0.0, 0.0, 1.0, 0.0)
+    transition_probabilities: tuple[tuple[float, ...], ...] = (
+        (0.0, 0.0, 0.0, 1.0, 0.0),
+        (0.0, 0.0, 0.0, 1.0, 0.0),
+        (0.0, 0.0, 0.0, 1.0, 0.0),
+        (0.0, 0.0, 0.0, 1.0, 0.0),
+        (0.0, 0.0, 0.0, 1.0, 0.0),
+    )
+
+    def __post_init__(self) -> None:
+        if not np.isfinite(self.record_rate_hz) or self.record_rate_hz <= 0.0:
+            raise ValueError("observation record_rate_hz must be finite and positive")
+        if self.record_rate_hz > _MAX_DEVICE_SAMPLE_RATE_HZ:
+            raise ValueError(
+                "observation record_rate_hz must not exceed "
+                f"{_MAX_DEVICE_SAMPLE_RATE_HZ:g}"
+            )
+        initial = _probability_vector(
+            self.initial_probabilities,
+            "observation initial probabilities",
+        )
+        transition = np.asarray(self.transition_probabilities, dtype=np.float64)
+        if transition.shape != (len(initial), len(initial)):
+            raise ValueError("observation transition matrix must be square")
+        if np.any(~np.isfinite(transition)) or np.any(transition < 0.0):
+            raise ValueError("observation transition probabilities must be finite")
+        if not np.allclose(transition.sum(axis=1), 1.0, atol=1e-9, rtol=0.0):
+            raise ValueError("each observation transition row must sum to one")
+        object.__setattr__(self, "initial_probabilities", tuple(initial.tolist()))
+        object.__setattr__(
+            self,
+            "transition_probabilities",
+            tuple(tuple(row.tolist()) for row in transition),
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "record_rate_hz": float(self.record_rate_hz),
+            "initial_probabilities": list(self.initial_probabilities),
+            "transition_probabilities": [
+                list(row) for row in self.transition_probabilities
+            ],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class TactileSensorDynamicsProfile:
+    """Provisional garment, clock, correlated-noise, and drift behavior."""
+
+    spatial_first_ring_fraction: UniformRange = field(
+        default_factory=lambda: UniformRange(0.0, 0.0)
+    )
+    spatial_second_ring_fraction: UniformRange = field(
+        default_factory=lambda: UniformRange(0.0, 0.0)
+    )
+    randomize_source_phase: bool = False
+    noise_ar1_rho: UniformRange = field(default_factory=lambda: UniformRange(0.0, 0.0))
+    drift_std_counts: UniformRange = field(
+        default_factory=lambda: UniformRange(0.0, 0.0)
+    )
+    drift_time_constant_s: UniformRange = field(
+        default_factory=lambda: UniformRange(30.0, 30.0)
+    )
+    observation_delivery: TactileObservationDeliveryProfile | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.randomize_source_phase) is not bool:
+            raise TypeError("randomize_source_phase must be a boolean")
+        first = self.spatial_first_ring_fraction
+        second = self.spatial_second_ring_fraction
+        if first.low < 0.0 or second.low < 0.0 or first.high + second.high > 1.0:
+            raise ValueError(
+                "spatial ring fractions must be nonnegative and sum to <= 1"
+            )
+        if not 0.0 <= self.noise_ar1_rho.low <= self.noise_ar1_rho.high < 1.0:
+            raise ValueError("noise AR(1) rho must be in [0, 1)")
+        if self.drift_std_counts.low < 0.0:
+            raise ValueError("drift standard deviation must be nonnegative")
+        if self.drift_time_constant_s.low <= 0.0:
+            raise ValueError("drift time constant must be positive")
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "status": SENSOR_DYNAMICS_STATUS,
+            "spatial_first_ring_fraction": self.spatial_first_ring_fraction.as_dict(),
+            "spatial_second_ring_fraction": self.spatial_second_ring_fraction.as_dict(),
+            "randomize_source_phase": self.randomize_source_phase,
+            "noise_ar1_rho": self.noise_ar1_rho.as_dict(),
+            "drift_std_counts": self.drift_std_counts.as_dict(),
+            "drift_time_constant_s": self.drift_time_constant_s.as_dict(),
+            "observation_delivery": (
+                None
+                if self.observation_delivery is None
+                else self.observation_delivery.as_dict()
+            ),
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class TactileCalibrationProfile:
     """Versioned configuration for a provisional tactile Sim2Real model."""
 
@@ -223,9 +333,14 @@ class TactileCalibrationProfile:
     randomization: TactileEpisodeRandomization = field(
         default_factory=TactileEpisodeRandomization
     )
+    sensor_dynamics: TactileSensorDynamicsProfile = field(
+        default_factory=TactileSensorDynamicsProfile
+    )
     fixed_taxel_gain_variation: float = 0.0
     fixed_device_rate_variation: float = 0.0
-    schema_version: int = TACTILE_CALIBRATION_PROFILE_VERSION
+    # Programmatic construction stays on the legacy behavior unless a caller
+    # deliberately opts into the newer sensor-dynamics schema.
+    schema_version: int = 1
     source_file_sha256: str | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -245,11 +360,16 @@ class TactileCalibrationProfile:
             raise ValueError("tactile source file SHA256 is invalid")
         if self.packet_size != 256 or self.packet_dtype != "uint8":
             raise ValueError("tactile packet contract must be uint8[256]")
-        if self.schema_version != TACTILE_CALIBRATION_PROFILE_VERSION:
+        if self.schema_version not in _SUPPORTED_PROFILE_VERSIONS:
             raise ValueError(
                 "unsupported tactile calibration profile version: "
                 f"{self.schema_version}"
             )
+        if (
+            self.schema_version == 1
+            and self.sensor_dynamics != TactileSensorDynamicsProfile()
+        ):
+            raise ValueError("profile v1 cannot configure sensor_dynamics")
         if not self.devices:
             raise ValueError("tactile calibration profile needs at least one device")
         names = tuple(device.name for device in self.devices)
@@ -284,7 +404,7 @@ class TactileCalibrationProfile:
         return hashlib.sha256(payload).hexdigest()
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "schema_version": self.schema_version,
             "profile_id": self.profile_id,
             "layout_sha256": self.layout_sha256,
@@ -298,37 +418,45 @@ class TactileCalibrationProfile:
             "fixed_taxel_gain_variation": float(self.fixed_taxel_gain_variation),
             "fixed_device_rate_variation": float(self.fixed_device_rate_variation),
         }
+        if self.schema_version >= 2:
+            payload["sensor_dynamics"] = self.sensor_dynamics.as_dict()
+        return payload
 
     @classmethod
     def from_dict(cls, value: Mapping[str, object]) -> TactileCalibrationProfile:
         """Parse one strict external profile without accepting silent extras."""
 
         payload = _strict_mapping(value, "tactile profile")
-        _require_exact_keys(
-            payload,
-            {
-                "schema_version",
-                "profile_id",
-                "layout_sha256",
-                "packet_size",
-                "packet_dtype",
-                "force_mapping_status",
-                "paired_force_calibrated",
-                "transfer",
-                "devices",
-                "randomization",
-                "fixed_taxel_gain_variation",
-                "fixed_device_rate_variation",
-            },
-            "tactile profile",
-        )
+        if "schema_version" not in payload:
+            raise ValueError("tactile profile has missing fields: schema_version")
         schema_version = payload["schema_version"]
         if type(schema_version) is not int:  # bool is not a schema version.
             raise ValueError("tactile profile schema_version must be an integer")
+        if schema_version not in _SUPPORTED_PROFILE_VERSIONS:
+            raise ValueError(
+                f"unsupported tactile calibration profile version: {schema_version}"
+            )
+        expected = {
+            "schema_version",
+            "profile_id",
+            "layout_sha256",
+            "packet_size",
+            "packet_dtype",
+            "force_mapping_status",
+            "paired_force_calibrated",
+            "transfer",
+            "devices",
+            "randomization",
+            "fixed_taxel_gain_variation",
+            "fixed_device_rate_variation",
+        }
+        if schema_version >= 2:
+            expected.add("sensor_dynamics")
+        _require_exact_keys(payload, expected, "tactile profile")
         if payload["force_mapping_status"] != FORCE_MAPPING_STATUS:
             raise ValueError("tactile profile cannot claim a paired force mapping")
         if payload["paired_force_calibrated"] is not False:
-            raise ValueError("profile v1 does not support paired-force calibration")
+            raise ValueError("tactile profiles do not support paired-force calibration")
         devices_raw = payload["devices"]
         if not isinstance(devices_raw, list):
             raise TypeError("tactile profile devices must be a list")
@@ -341,6 +469,11 @@ class TactileCalibrationProfile:
             transfer=_transfer_from_dict(payload["transfer"]),
             devices=tuple(_device_from_dict(item) for item in devices_raw),
             randomization=_randomization_from_dict(payload["randomization"]),
+            sensor_dynamics=(
+                _sensor_dynamics_from_dict(payload["sensor_dynamics"])
+                if schema_version >= 2
+                else TactileSensorDynamicsProfile()
+            ),
             fixed_taxel_gain_variation=_strict_float(
                 payload["fixed_taxel_gain_variation"],
                 "fixed_taxel_gain_variation",
@@ -360,6 +493,7 @@ class TactileCalibrationProfile:
         try:
             value = json.loads(
                 raw.decode("utf-8"),
+                object_pairs_hook=_unique_json_object,
                 parse_constant=_reject_json_constant,
             )
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
@@ -379,11 +513,35 @@ class RealizedTactileEpisode:
     device_noise_std_counts: np.ndarray
     taxel_preload: np.ndarray
     taxel_residual_bias_counts: np.ndarray
+    source_phase_s: np.ndarray | None = None
+    device_noise_ar1_rho: np.ndarray | None = None
+    device_drift_std_counts: np.ndarray | None = None
+    device_drift_time_constant_s: np.ndarray | None = None
+    spatial_first_ring_fraction: float | None = None
+    spatial_second_ring_fraction: float | None = None
 
     def __post_init__(self) -> None:
         _validate_seed(self.seed, "realized tactile episode seed")
         if self.index < 0:
             raise ValueError("realized tactile episode index must be nonnegative")
+        optional_arrays = (
+            self.source_phase_s,
+            self.device_noise_ar1_rho,
+            self.device_drift_std_counts,
+            self.device_drift_time_constant_s,
+        )
+        if any(value is None for value in optional_arrays) != all(
+            value is None for value in optional_arrays
+        ):
+            raise ValueError(
+                "realized sensor dynamics arrays must be configured together"
+            )
+        fractions = (
+            self.spatial_first_ring_fraction,
+            self.spatial_second_ring_fraction,
+        )
+        if (fractions[0] is None) != (fractions[1] is None):
+            raise ValueError("realized spatial fractions must be configured together")
 
     @property
     def sha256(self) -> str:
@@ -397,10 +555,29 @@ class RealizedTactileEpisode:
             self.taxel_residual_bias_counts,
         ):
             digest.update(value.astype("<f8", copy=False).tobytes())
+        if self.source_phase_s is not None:
+            digest.update(b"sensor-dynamics-v2")
+            for value in (
+                self.source_phase_s,
+                self.device_noise_ar1_rho,
+                self.device_drift_std_counts,
+                self.device_drift_time_constant_s,
+            ):
+                assert value is not None
+                digest.update(value.astype("<f8", copy=False).tobytes())
+            digest.update(
+                np.asarray(
+                    [
+                        self.spatial_first_ring_fraction,
+                        self.spatial_second_ring_fraction,
+                    ],
+                    dtype="<f8",
+                ).tobytes()
+            )
         return digest.hexdigest()
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        payload: dict[str, object] = {
             "index": self.index,
             "seed": self.seed,
             "sha256": self.sha256,
@@ -412,6 +589,16 @@ class RealizedTactileEpisode:
                 self.taxel_residual_bias_counts
             ),
         }
+        if self.source_phase_s is not None:
+            payload["source_phase_s"] = self.source_phase_s.tolist()
+            payload["device_noise_ar1_rho"] = self.device_noise_ar1_rho.tolist()
+            payload["device_drift_std_counts"] = self.device_drift_std_counts.tolist()
+            payload["device_drift_time_constant_s"] = (
+                self.device_drift_time_constant_s.tolist()
+            )
+            payload["spatial_first_ring_fraction"] = self.spatial_first_ring_fraction
+            payload["spatial_second_ring_fraction"] = self.spatial_second_ring_fraction
+        return payload
 
 
 class TactileProfileSampler:
@@ -496,13 +683,39 @@ class TactileProfileSampler:
         )
         preload = randomization.preload.sample(rng, self.taxel_count)
         residual_bias = randomization.residual_bias_counts.sample(rng, self.taxel_count)
-        for value in (
+        values = [
             taxel_gain,
             device_rate,
             device_noise,
             preload,
             residual_bias,
-        ):
+        ]
+        dynamics_values: dict[str, object] = {}
+        if self.profile.schema_version >= 2:
+            dynamics = self.profile.sensor_dynamics
+            device_count = len(self.profile.devices)
+            if dynamics.randomize_source_phase:
+                source_phase = rng.uniform(0.0, 1.0, device_count) / device_rate
+            else:
+                source_phase = np.asarray(
+                    [device.phase_offset_s for device in self.profile.devices],
+                    dtype=np.float64,
+                )
+            noise_rho = dynamics.noise_ar1_rho.sample(rng, device_count)
+            drift_std = dynamics.drift_std_counts.sample(rng, device_count)
+            drift_tau = dynamics.drift_time_constant_s.sample(rng, device_count)
+            first_ring = float(dynamics.spatial_first_ring_fraction.sample(rng, 1)[0])
+            second_ring = float(dynamics.spatial_second_ring_fraction.sample(rng, 1)[0])
+            values.extend((source_phase, noise_rho, drift_std, drift_tau))
+            dynamics_values = {
+                "source_phase_s": source_phase,
+                "device_noise_ar1_rho": noise_rho,
+                "device_drift_std_counts": drift_std,
+                "device_drift_time_constant_s": drift_tau,
+                "spatial_first_ring_fraction": first_ring,
+                "spatial_second_ring_fraction": second_ring,
+            }
+        for value in values:
             self._make_readonly(value)
         episode = RealizedTactileEpisode(
             index=episode_index,
@@ -512,6 +725,7 @@ class TactileProfileSampler:
             device_noise_std_counts=device_noise,
             taxel_preload=preload,
             taxel_residual_bias_counts=residual_bias,
+            **dynamics_values,
         )
         self.episode_index = episode_index
         return episode, rng
@@ -583,6 +797,7 @@ def make_legacy_tactile_profile(
         for index in range(device_count)
     )
     return TactileCalibrationProfile(
+        schema_version=1,
         profile_id=profile_id,
         layout_sha256=layout_sha256,
         transfer=TactileTransferProfile(
@@ -668,12 +883,14 @@ def quantize_counts(
     *,
     noise_std_counts: float,
     transfer: TactileTransferProfile,
-    rng: np.random.Generator,
+    rng: np.random.Generator | None,
 ) -> np.ndarray:
     """Add per-sample electronics noise, deadband, saturation, and quantize."""
 
     value = np.asarray(response, dtype=np.float64)
     if noise_std_counts > 0.0:
+        if rng is None:
+            raise ValueError("count noise requires a random generator")
         value = value + rng.normal(0.0, noise_std_counts, size=value.shape)
     value = np.maximum(value - transfer.output_deadband_counts, 0.0)
     return np.clip(
@@ -803,6 +1020,86 @@ def _randomization_from_dict(value: object) -> TactileEpisodeRandomization:
     )
 
 
+def _sensor_dynamics_from_dict(value: object) -> TactileSensorDynamicsProfile:
+    payload = _strict_mapping(value, "tactile sensor dynamics")
+    _require_exact_keys(
+        payload,
+        {
+            "status",
+            "spatial_first_ring_fraction",
+            "spatial_second_ring_fraction",
+            "randomize_source_phase",
+            "noise_ar1_rho",
+            "drift_std_counts",
+            "drift_time_constant_s",
+            "observation_delivery",
+        },
+        "tactile sensor dynamics",
+    )
+    if payload["status"] != SENSOR_DYNAMICS_STATUS:
+        raise ValueError("tactile sensor dynamics must remain marked provisional")
+    randomize_source_phase = payload["randomize_source_phase"]
+    if type(randomize_source_phase) is not bool:
+        raise TypeError("randomize_source_phase must be a boolean")
+    delivery = payload["observation_delivery"]
+    return TactileSensorDynamicsProfile(
+        spatial_first_ring_fraction=_range_from_dict(
+            payload["spatial_first_ring_fraction"],
+            "spatial_first_ring_fraction",
+        ),
+        spatial_second_ring_fraction=_range_from_dict(
+            payload["spatial_second_ring_fraction"],
+            "spatial_second_ring_fraction",
+        ),
+        randomize_source_phase=randomize_source_phase,
+        noise_ar1_rho=_range_from_dict(payload["noise_ar1_rho"], "noise_ar1_rho"),
+        drift_std_counts=_range_from_dict(
+            payload["drift_std_counts"],
+            "drift_std_counts",
+        ),
+        drift_time_constant_s=_range_from_dict(
+            payload["drift_time_constant_s"],
+            "drift_time_constant_s",
+        ),
+        observation_delivery=(
+            None if delivery is None else _observation_delivery_from_dict(delivery)
+        ),
+    )
+
+
+def _observation_delivery_from_dict(
+    value: object,
+) -> TactileObservationDeliveryProfile:
+    payload = _strict_mapping(value, "tactile observation delivery")
+    _require_exact_keys(
+        payload,
+        {
+            "record_rate_hz",
+            "initial_probabilities",
+            "transition_probabilities",
+        },
+        "tactile observation delivery",
+    )
+    initial = _strict_float_sequence(
+        payload["initial_probabilities"],
+        "observation initial probabilities",
+    )
+    rows_raw = payload["transition_probabilities"]
+    if not isinstance(rows_raw, list):
+        raise TypeError("observation transition probabilities must be a list")
+    rows = tuple(
+        _strict_float_sequence(row, "observation transition row") for row in rows_raw
+    )
+    return TactileObservationDeliveryProfile(
+        record_rate_hz=_strict_float(
+            payload["record_rate_hz"],
+            "observation record_rate_hz",
+        ),
+        initial_probabilities=initial,
+        transition_probabilities=rows,
+    )
+
+
 def _range_from_dict(value: object, name: str) -> UniformRange:
     payload = _strict_mapping(value, name)
     _require_exact_keys(payload, {"low", "high"}, name)
@@ -810,6 +1107,23 @@ def _range_from_dict(value: object, name: str) -> UniformRange:
         _strict_float(payload["low"], f"{name}.low"),
         _strict_float(payload["high"], f"{name}.high"),
     )
+
+
+def _strict_float_sequence(value: object, name: str) -> tuple[float, ...]:
+    if not isinstance(value, list):
+        raise TypeError(f"{name} must be a list")
+    return tuple(_strict_float(item, name) for item in value)
+
+
+def _probability_vector(value: Sequence[float], name: str) -> np.ndarray:
+    result = np.asarray(value, dtype=np.float64)
+    if result.ndim != 1 or len(result) < 1:
+        raise ValueError(f"{name} must be a nonempty vector")
+    if np.any(~np.isfinite(result)) or np.any(result < 0.0):
+        raise ValueError(f"{name} must be finite and nonnegative")
+    if not np.isclose(result.sum(), 1.0, atol=1e-9, rtol=0.0):
+        raise ValueError(f"{name} must sum to one")
+    return result
 
 
 def _strict_mapping(value: object, name: str) -> dict[str, object]:
@@ -867,6 +1181,15 @@ def _validate_seed(value: object, name: str) -> int:
 
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"non-finite JSON constant is forbidden: {value}")
+
+
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON field is forbidden: {key}")
+        result[key] = value
+    return result
 
 
 def _array_summary(value: np.ndarray) -> dict[str, float]:

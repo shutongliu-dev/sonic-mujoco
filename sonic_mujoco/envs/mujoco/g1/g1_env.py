@@ -140,6 +140,8 @@ class MujocoG1Env(MujocoEnvBase):
 
         self.contacts.begin()
         self.tactile.begin()
+        causal_tactile = self.tactile_adapter.profile.schema_version >= 2
+        tactile_updated = np.zeros_like(self.tactile_suit.updated)
         for _ in range(steps):
             state = self.get_robot_state()
             torque = (
@@ -172,10 +174,19 @@ class MujocoG1Env(MujocoEnvBase):
             )
             mujoco.mj_step(self.model, self.data)
             self.contacts.update(self.data)
-            self.tactile.update(self.data)
+            normal_force = self.tactile.update(self.data)
+            if causal_tactile:
+                tactile_sample = self.tactile_adapter.update_normal_force(
+                    normal_force,
+                    self.time,
+                )
+                tactile_updated |= tactile_sample.updated
         self.contacts.finish()
         tactile = self.tactile.finish()
-        self.tactile_suit = self.tactile_adapter.update(tactile, self.time)
+        if causal_tactile:
+            self.tactile_suit = self.tactile_adapter.snapshot(updated=tactile_updated)
+        else:
+            self.tactile_suit = self.tactile_adapter.update(tactile, self.time)
 
     def reset(self, seed: int | None = None) -> None:
         super().reset()

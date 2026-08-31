@@ -243,6 +243,10 @@ class JuQiaoTactileSkinTest(unittest.TestCase):
         )
 
         self.assertNotEqual(base.sha256, shifted.sha256)
+        calibration = base.as_dict()["mount_calibration"]
+        self.assertEqual(calibration["status"], "unverified_absolute_registration")
+        self.assertFalse(calibration["left_verified"])
+        self.assertFalse(calibration["right_verified"])
 
     def test_layout_hash_is_stable_across_scenes(self) -> None:
         sweep = MujocoG1SweepEnv()
@@ -312,6 +316,28 @@ class JuQiaoTactileSkinTest(unittest.TestCase):
             adapter.metadata["calibration_status"],
             "provisional_until_force_fixture_calibration",
         )
+
+    def test_default_adapter_keeps_legacy_sample_boundary(self) -> None:
+        skin = build_juqiao_skin_layout(self.env.model)
+        recorder = TactileRecorder(self.env.model, layout=skin.taxels)
+        adapter = JuQiaoTactileAdapter(
+            skin,
+            sample_rate_hz=14.0,
+            sample_rate_jitter=0.0,
+            gain_counts_per_newton=1.0,
+            gain_variation=0.0,
+        )
+        adapter.update(recorder.last_frame, time=0.0)
+
+        exact_boundary = 1.0 / 14.0
+        rounded_boundary = round(exact_boundary, 12)
+        time = (exact_boundary + rounded_boundary) / 2.0
+        force = np.full(len(recorder.layout), 10.0)
+        frame = replace(recorder.last_frame, normal_force=force)
+        sample = adapter.update(frame, time=time)
+
+        np.testing.assert_array_equal(sample.updated, np.ones(3, dtype=bool))
+        self.assertEqual(sample.device("vest").max(), 10)
 
 
 if __name__ == "__main__":

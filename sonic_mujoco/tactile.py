@@ -154,6 +154,7 @@ class TactileRecorder:
         self._impulse = np.zeros((len(self.layout), 3), dtype=np.float64)
         self._normal_impulse = np.zeros(len(self.layout), dtype=np.float64)
         self._tangent_impulse = np.zeros((len(self.layout), 3), dtype=np.float64)
+        self._step_normal_force = np.zeros(len(self.layout), dtype=np.float64)
         self._sample_count = np.zeros(len(self.layout), dtype=np.int32)
         self._contact = np.zeros(len(self.layout), dtype=bool)
         self._object_impulse: dict[tuple[int, int, int], float] = {}
@@ -168,6 +169,7 @@ class TactileRecorder:
         self._impulse.fill(0.0)
         self._normal_impulse.fill(0.0)
         self._tangent_impulse.fill(0.0)
+        self._step_normal_force.fill(0.0)
         self._sample_count.fill(0)
         self._contact.fill(False)
         self._object_impulse.clear()
@@ -234,10 +236,17 @@ class TactileRecorder:
         radius.setflags(write=False)
         return radius
 
-    def update(self, data: mujoco.MjData) -> None:
-        """Accumulate one physics step of contact forces."""
+    @property
+    def step_normal_force(self) -> np.ndarray:
+        """Normal force observed by the most recent physics-step update."""
+
+        return self._step_normal_force.copy()
+
+    def update(self, data: mujoco.MjData) -> np.ndarray:
+        """Accumulate and return one physics step of normal contact force."""
 
         timestep = float(self.model.opt.timestep)
+        self._step_normal_force.fill(0.0)
         contact_force = np.zeros(6, dtype=np.float64)
         touched: set[int] = set()
         for contact_id in range(data.ncon):
@@ -268,6 +277,7 @@ class TactileRecorder:
             indices = np.fromiter(touched, dtype=np.int32)
             self._sample_count[indices] += 1
         self._steps += 1
+        return self.step_normal_force
 
     def _robot_contact_sides(
         self,
@@ -345,6 +355,7 @@ class TactileRecorder:
             self._impulse[index] += weighted_force * timestep
             self._normal_impulse[index] += normal_impulse
             self._tangent_impulse[index] += tangent_force * timestep
+            self._step_normal_force[index] += normal_force
             self._contact[index] = True
             touched.add(index)
             key = index, projection.other_body_id, projection.other_geom_id

@@ -91,7 +91,7 @@ MUJOCO_GL=egl .venv/bin/python scripts/run_gr00t_sweep.py --seed 0
 ```bash
 MUJOCO_GL=egl .venv/bin/python scripts/run_gr00t_sweep.py \
   --seed 0 \
-  --tactile-profile configs/tactile/juqiao_g1_sim2real_provisional_v1.json
+  --tactile-profile configs/tactile/juqiao_g1_sim2real_provisional_v2.json
 ```
 
 也可以通过 `SONIC_POLICY_DIR` 改变默认模型目录，或用 `--encoder`、`--decoder`
@@ -456,6 +456,8 @@ anchor、相机内参、重建比例和视觉来源。接触字段包括机器�
   的同 body 接触记为未映射，不生成假读数；
 - MuJoCo 每个物理子步取得接触力，并按距离核分配到相邻 taxel；分配权重和为 1，
   保持总力与总冲量；
+- v2 profile 在接触投影之后、非线性换算之前，以同一衣片内的一环和二环邻接核
+  模拟布料传力；空间核仍保持总力，不跨设备或衣片传播；
 - 手臂压到胸背等机器人自接触会在相接的两侧衣片分别产生读数；
 - 真机兼容层沿用 `vest/left_arm/right_arm` 三设备与原始通道顺序，未接线的
   144 个 vest 槽始终为零；
@@ -471,18 +473,29 @@ metadata 会明确标记为 provisional。训练可以直接使用与真机同�
 同时保留物理量侧车；完成砝码或测力台标定后只需替换 gain/offset/gamma，不必
 重新仿真。
 
-仓库提供的
-`configs/tactile/juqiao_g1_sim2real_provisional_v1.json` 只对齐已知的真机接口和
-传感器侧行为：三路独立约 14 Hz 采样、100 ms stale、sample-and-hold、8% 通道
-固定灵敏度差异、每 episode 额外 ±8% gain 域随机化，以及保守的 raw-count 底噪。
-两层 gain 会合成约 0.85–1.17 倍的覆盖范围。它不会把任务数据的边际分布冒充力标定，
-因此 profile 中仍明确写着 `provisional_unpaired_force_mapping`。PICO 遥操同样用
-一个参数启用：
+仓库默认推荐
+`configs/tactile/juqiao_g1_sim2real_provisional_v2.json`。它保留三路独立约
+14 Hz 采样、100 ms stale、sample-and-hold、8% 通道固定灵敏度差异和每 episode
+额外 ±8% gain 域随机化，并增加保守的一环/二环衣片传力、随机 source phase、
+AR(1) 相关底噪、带符号的慢速 OU 漂移，以及非零的上升/回落时间常数。这些参数
+来自匿名时序与空间统计，只是未配对的 Sim2Real 先验，不是厂商标定结果。
+
+v2 的 `observation_delivery` 有意保持为 `null`。当前真机数据没有同时保存 source
+时间、接收时间、序号和 updated 标志，无法把传感器采样与 50 Hz 发布链路可靠
+解耦；再拟合一层 hold-gap 会重复计算已经由约 14 Hz source clock 产生的保持。
+袖套的轴向、接缝方向和通道偏移也尚未完成真机配准，左右袖套都需要按已知位置
+逐点按压后才能确定 mount。N→count 的 gain/offset/gamma、空间扩散和传感器动态
+均明确标记为 provisional；完成同步测力与点按标定后，应替换对应参数而不是将
+现有任务边际分布当成标定曲线。
+
+旧的 `configs/tactile/juqiao_g1_sim2real_provisional_v1.json` 继续受支持，用于复现
+原有无空间扩散、白噪声和固定 phase 的数据链路。PICO 遥操用一个参数启用推荐的
+v2 profile：
 
 ```bash
 .venv/bin/python scripts/run_pico_teleop.py \
   --scene sweep \
-  --tactile-profile configs/tactile/juqiao_g1_sim2real_provisional_v1.json
+  --tactile-profile configs/tactile/juqiao_g1_sim2real_provisional_v2.json
 ```
 
 可以用真实或仿真 LeRobot 数据集运行匿名分布审计：

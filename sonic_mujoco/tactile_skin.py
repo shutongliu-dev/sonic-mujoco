@@ -16,6 +16,7 @@ import numpy as np
 from .tactile import TactileFrame, TaxelLayout
 from .tactile_calibration import (
     FORCE_MAPPING_STATUS,
+    SENSOR_DYNAMICS_STATUS,
     TactileCalibrationProfile,
     TactileEpisodeRandomization,
     TactileInputQuantity,
@@ -26,6 +27,8 @@ from .tactile_calibration import (
     quantize_counts,
     tactile_input,
 )
+from .tactile_dynamics import AR1NoiseState, SignedOUDriftState
+from .tactile_spatial import GarmentLoadSpreadKernel
 
 TACTILE_DEVICE_NAMES = ("vest", "left_arm", "right_arm")
 TACTILE_DEVICE_DIM = 256
@@ -34,6 +37,10 @@ _MAPPING_RADIUS_MIN_M = 0.03
 _MAPPING_RADIUS_MAX_M = 0.06
 _MAPPING_RADIUS_MARGIN_M = 0.01
 _MAX_SAMPLE_EVENTS_PER_UPDATE = 4096
+_SAMPLE_TIME_DECIMALS = 12
+_AR1_RNG_TAG = 0x415231
+_DRIFT_RNG_TAG = 0x4F5521
+_DROPOUT_RNG_TAG = 0x44524F50
 _SLEEVE_RAW_CHANNELS = np.asarray(
     tuple(range(128, TACTILE_DEVICE_DIM)) + tuple(range(128)),
     dtype=np.int32,
@@ -144,6 +151,8 @@ class JuQiaoSkinLayout:
     @property
     def sha256(self) -> str:
         payload = self.as_dict(include_taxels=False)
+        # Calibration status is provenance, not part of the spatial layout.
+        payload.pop("mount_calibration")
         payload["taxels"] = self._taxel_records(include_runtime_ids=False)
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(canonical).hexdigest()
@@ -165,6 +174,14 @@ class JuQiaoSkinLayout:
             "vest_wired_taxels": 112,
             "left_mount": self.left_mount.as_dict(),
             "right_mount": self.right_mount.as_dict(),
+            "mount_calibration": {
+                "status": "unverified_absolute_registration",
+                "left_verified": False,
+                "right_verified": False,
+                "required_fixture": (
+                    "point_press_proximal_distal_and_circular_seam_per_sleeve"
+                ),
+            },
             "coordinate_frame": "owning_mujoco_body_local",
             "contact_routing": "all_collidable_geoms_on_owning_body",
             "mapping_radius_m": {
@@ -282,6 +299,14 @@ class JuQiaoTactileAdapter:
             fixed_device_rate_variation=sample_rate_jitter,
             randomization=randomization,
         )
+        self._uses_sensor_dynamics = self.profile.schema_version >= 2
+        if (
+            self._uses_sensor_dynamics
+            and self.profile.sensor_dynamics.observation_delivery is not None
+        ):
+            raise NotImplementedError(
+                "observation_delivery is not yet supported by the JuQiao adapter"
+            )
         device_names = tuple(device.name for device in self.profile.devices)
         if device_names != TACTILE_DEVICE_NAMES:
             raise ValueError(
@@ -330,12 +355,34 @@ class JuQiaoTactileAdapter:
             [device.dropout_probability for device in self.profile.devices],
             dtype=np.float64,
         )
+        self._device_taxel_indices = tuple(
+            np.flatnonzero(layout.taxels.region_id == device_id)
+            for device_id in range(len(TACTILE_DEVICE_NAMES))
+        )
+        self._garment_topology = (
+            _garment_grid_topology(layout) if self._uses_sensor_dynamics else None
+        )
+        self._garment_topology_sha256 = (
+            _topology_sha256(
+                self._garment_topology,
+                layout.taxels.channel_id,
+            )
+            if self._garment_topology is not None
+            else None
+        )
+        self._spread_kernel: GarmentLoadSpreadKernel | None = None
+        self._noise_states: tuple[AR1NoiseState, ...] = ()
+        self._drift_states: tuple[SignedOUDriftState, ...] = ()
+        self._dropout_rngs: tuple[np.random.Generator, ...] = ()
         self._held = np.zeros(
             (len(TACTILE_DEVICE_NAMES), TACTILE_DEVICE_DIM), dtype=np.uint8
         )
         self._source_time = np.full(len(TACTILE_DEVICE_NAMES), -1.0)
         self._next_sample = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=np.float64)
+        self._sample_origin = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=np.float64)
+        self._next_sample_index = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=np.int64)
         self._response = np.zeros(len(layout.taxels), dtype=np.float64)
+        self._causal_target = np.zeros(len(layout.taxels), dtype=np.float64)
         self._last_update_time = float(initial_time)
         self._activate_episode(initial_time, seed)
 
@@ -343,8 +390,8 @@ class JuQiaoTactileAdapter:
     def metadata(self) -> dict[str, object]:
         transfer = self.profile.transfer
         randomization = self.profile.randomization
-        return {
-            "schema_version": 1,
+        metadata: dict[str, object] = {
+            "schema_version": self.profile.schema_version,
             "mode": "triple",
             "devices": list(TACTILE_DEVICE_NAMES),
             "shape": [TACTILE_DEVICE_DIM],
@@ -411,6 +458,34 @@ class JuQiaoTactileAdapter:
             },
             "updated_semantics": "non_dropped_device_packet_published_on_this_record_row",
         }
+        if self._uses_sensor_dynamics:
+            metadata["sensor_dynamics"] = {
+                "status": SENSOR_DYNAMICS_STATUS,
+                "force_spread_order": (
+                    "normal_force_before_input_conversion_and_transfer"
+                ),
+                "noise_semantics": "AR(1)_advanced_once_per_source_sample",
+                "drift_semantics": "signed_OU_advanced_at_source_sample_time",
+                "dropout_semantics": (
+                    "source_state_advances_before_independent_device_dropout"
+                ),
+                "observation_delivery": "disabled_unidentified_from_current_data",
+                "baseline_pipeline": {
+                    "status": "not_simulated",
+                    "simulated_domain": "post_baseline_nonnegative_count",
+                    "hardware_startup_baseline_packets": 100,
+                    "hardware_recalibration_packets": 50,
+                    "recalibration_blackout": "not_simulated",
+                },
+                "sleeve_elbow_coupling": (
+                    "continuous_16x16_grid_across_two_links_provisional"
+                ),
+                "mount_calibration": self.layout.as_dict(include_taxels=False)[
+                    "mount_calibration"
+                ],
+                "topology_sha256": self._garment_topology_sha256,
+            }
+        return metadata
 
     def reset(self, time: float = 0.0, *, seed: int | None = None) -> None:
         self._activate_episode(time, seed)
@@ -424,68 +499,259 @@ class JuQiaoTactileAdapter:
         self._period = 1.0 / self._device_sample_rate
         self._held.fill(0)
         self._source_time.fill(-1.0)
-        self._next_sample = float(time) + self._phase
+        phase = self._phase
+        if self._uses_sensor_dynamics:
+            self._activate_sensor_dynamics(time)
+            assert self._episode.source_phase_s is not None
+            phase = self._episode.source_phase_s
+        self._sample_origin = float(time) + phase
+        self._next_sample = self._sample_origin.copy()
+        self._next_sample_index.fill(0)
         self._response.fill(0.0)
+        self._causal_target = self._normal_force_target(
+            np.zeros(len(self.layout.taxels), dtype=np.float64)
+        )
         self._last_update_time = float(time)
         self.last_frame = self._frame(np.zeros(3, dtype=bool))
 
     def update(self, frame: TactileFrame, time: float) -> JuQiaoTactileFrame:
+        """Convert an interval-mean physical frame using the legacy API.
+
+        This path intentionally retains the historical assumption that the
+        frame's mean force applies over the whole interval ending at ``time``.
+        Physics-step callers should use :meth:`update_normal_force` so a new
+        force observation cannot affect an earlier device sample.
+        """
+
         if not _same_layout(frame.layout, self.layout.taxels):
             raise ValueError("tactile frame uses a different taxel layout")
+        target = self._normal_force_target(frame.normal_force)
+        self._validate_sample_time(time)
+        updated = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=bool)
+        response_time = self._last_update_time
+        for sample_time, device_id in self._sample_events(time):
+            self._advance_response(target, sample_time - response_time)
+            response_time = sample_time
+            source_time = time if self._legacy_compatibility else sample_time
+            self._publish_sample(device_id, source_time, updated)
+
+        self._advance_response(target, time - response_time)
+        self._causal_target = target
+        return self._finish_update(time, updated)
+
+    def update_normal_force(
+        self,
+        normal_force_n: np.ndarray,
+        time: float,
+    ) -> JuQiaoTactileFrame:
+        """Advance from one timestamped physics-step force observation.
+
+        Device events strictly before ``time`` use the preceding observation.
+        An event exactly at ``time`` may use the new observation. This makes
+        the adapter causal while preserving asynchronous device clocks.
+        """
+
+        target = self._normal_force_target(normal_force_n)
+        self._validate_sample_time(time)
+        updated = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=bool)
+        boundary_events: list[tuple[float, int]] = []
+        response_time = self._last_update_time
+        boundary_time = (
+            round(float(time), _SAMPLE_TIME_DECIMALS)
+            if self._uses_sensor_dynamics
+            else float(time)
+        )
+        for sample_time, device_id in self._sample_events(time):
+            if sample_time == boundary_time:
+                boundary_events.append((sample_time, device_id))
+                continue
+            self._advance_response(self._causal_target, sample_time - response_time)
+            response_time = sample_time
+            self._publish_sample(device_id, sample_time, updated)
+
+        self._advance_response(self._causal_target, time - response_time)
+        self._causal_target = target
+        self._advance_response(target, 0.0)
+        for sample_time, device_id in boundary_events:
+            self._publish_sample(device_id, sample_time, updated)
+        return self._finish_update(time, updated)
+
+    def update_normal_force_history(
+        self,
+        history: Iterable[tuple[float, np.ndarray]],
+    ) -> JuQiaoTactileFrame:
+        """Advance a chronological ``(time, normal_force_n)`` history.
+
+        ``updated`` in the returned frame is the per-device OR across every
+        observation in this call; packet values remain sample-and-hold.
+        """
+
+        updated = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=bool)
+        for time, normal_force_n in history:
+            frame = self.update_normal_force(normal_force_n, time)
+            updated |= frame.updated
+        return self.snapshot(updated=updated)
+
+    def snapshot(self, *, updated: np.ndarray | None = None) -> JuQiaoTactileFrame:
+        """Return held packets, optionally replacing the row update flags."""
+
+        if updated is None:
+            updated = self.last_frame.updated
+        self.last_frame = self._frame(updated)
+        return self.last_frame
+
+    def _normal_force_target(self, normal_force_n: np.ndarray) -> np.ndarray:
+        transfer = self.profile.transfer
+        force = normal_force_n
+        if self._uses_sensor_dynamics:
+            assert self._spread_kernel is not None
+            force = tactile_input(normal_force_n, self.layout.area_m2, "force")
+            force = self._spread_kernel.spread(force)
+        physical_input = tactile_input(
+            force,
+            self.layout.area_m2,
+            transfer.input_quantity,
+        )
+        return power_law_response(physical_input, transfer, self._episode)
+
+    def _activate_sensor_dynamics(self, time: float) -> None:
+        episode = self._episode
+        assert self._garment_topology is not None
+        assert episode.spatial_first_ring_fraction is not None
+        assert episode.spatial_second_ring_fraction is not None
+        assert episode.device_noise_ar1_rho is not None
+        assert episode.device_drift_std_counts is not None
+        assert episode.device_drift_time_constant_s is not None
+        self._spread_kernel = GarmentLoadSpreadKernel(
+            *self._garment_topology,
+            first_ring_fraction=episode.spatial_first_ring_fraction,
+            second_ring_fraction=episode.spatial_second_ring_fraction,
+        )
+        self._noise_states = tuple(
+            AR1NoiseState(
+                len(indices),
+                marginal_std=float(episode.device_noise_std_counts[device_id]),
+                coefficient=float(episode.device_noise_ar1_rho[device_id]),
+                seed=_component_seed(episode.seed, _AR1_RNG_TAG, device_id),
+            )
+            for device_id, indices in enumerate(self._device_taxel_indices)
+        )
+        self._drift_states = tuple(
+            SignedOUDriftState(
+                len(indices),
+                stationary_std=float(episode.device_drift_std_counts[device_id]),
+                tau_s=float(episode.device_drift_time_constant_s[device_id]),
+                seed=_component_seed(episode.seed, _DRIFT_RNG_TAG, device_id),
+                initial_time=time,
+            )
+            for device_id, indices in enumerate(self._device_taxel_indices)
+        )
+        self._dropout_rngs = tuple(
+            np.random.default_rng(
+                _component_seed(episode.seed, _DROPOUT_RNG_TAG, device_id)
+            )
+            for device_id in range(len(TACTILE_DEVICE_NAMES))
+        )
+
+    def _validate_sample_time(self, time: float) -> None:
         if not np.isfinite(time):
             raise ValueError("sample time must be finite")
         if time < self._last_update_time:
             raise ValueError("tactile sample time must be nondecreasing")
-        transfer = self.profile.transfer
-        physical_input = tactile_input(
-            frame.normal_force,
-            self.layout.area_m2,
-            transfer.input_quantity,
-        )
-        target = power_law_response(physical_input, transfer, self._episode)
-        updated = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=bool)
-        region_ids = self.layout.taxels.region_id
-        channels = self.layout.taxels.channel_id
+
+    def _sample_events(self, time: float) -> list[tuple[float, int]]:
+        if self.profile.schema_version == 1:
+            return self._legacy_sample_events(time)
+
         events: list[tuple[float, int]] = []
+        next_indices = self._next_sample_index.copy()
         for device_id in range(len(TACTILE_DEVICE_NAMES)):
-            if time + 1e-12 >= self._next_sample[device_id]:
-                elapsed = time - self._next_sample[device_id]
-                period = self._period[device_id]
-                periods = math.floor(max(elapsed, 0.0) / period) + 1
-                if len(events) + periods > _MAX_SAMPLE_EVENTS_PER_UPDATE:
+            index = int(next_indices[device_id])
+            while True:
+                sample_time = round(
+                    float(
+                        self._sample_origin[device_id] + index * self._period[device_id]
+                    ),
+                    _SAMPLE_TIME_DECIMALS,
+                )
+                if sample_time > time:
+                    break
+                if len(events) >= _MAX_SAMPLE_EVENTS_PER_UPDATE:
                     raise RuntimeError(
                         "too many tactile samples elapsed; reset the adapter after "
                         "a simulation-time discontinuity"
                     )
-                events.extend(
-                    (
-                        min(
-                            self._next_sample[device_id] + index * period,
-                            float(time),
-                        ),
-                        device_id,
-                    )
-                    for index in range(periods)
-                )
-                self._next_sample[device_id] += periods * period
+                events.append((sample_time, device_id))
+                index += 1
+            next_indices[device_id] = index
 
-        response_time = self._last_update_time
-        for sample_time, device_id in sorted(events):
-            self._advance_response(target, sample_time - response_time)
-            response_time = sample_time
-            if self._rng.random() < self._dropout_probability[device_id]:
+        self._next_sample_index = next_indices
+        events.sort()
+        return events
+
+    def _legacy_sample_events(self, time: float) -> list[tuple[float, int]]:
+        """Retain the published v1 floating-point clock exactly."""
+
+        events: list[tuple[float, int]] = []
+        for device_id in range(len(TACTILE_DEVICE_NAMES)):
+            if time + 1e-12 < self._next_sample[device_id]:
                 continue
-            self._held[device_id] = self._sample_device(
-                device_id,
-                region_ids,
-                channels,
+            elapsed = time - self._next_sample[device_id]
+            period = self._period[device_id]
+            periods = math.floor(max(elapsed, 0.0) / period) + 1
+            if len(events) + periods > _MAX_SAMPLE_EVENTS_PER_UPDATE:
+                raise RuntimeError(
+                    "too many tactile samples elapsed; reset the adapter after "
+                    "a simulation-time discontinuity"
+                )
+            events.extend(
+                (
+                    min(
+                        self._next_sample[device_id] + index * period,
+                        float(time),
+                    ),
+                    device_id,
+                )
+                for index in range(periods)
             )
-            self._source_time[device_id] = (
-                time if self._legacy_compatibility else sample_time
-            )
-            updated[device_id] = True
+            self._next_sample[device_id] += periods * period
 
-        self._advance_response(target, time - response_time)
+        events.sort()
+        return events
+
+    def _publish_sample(
+        self,
+        device_id: int,
+        source_time: float,
+        updated: np.ndarray,
+    ) -> None:
+        if self._uses_sensor_dynamics:
+            packet = self._sample_v2_device(device_id, source_time)
+            if (
+                self._dropout_rngs[device_id].random()
+                < self._dropout_probability[device_id]
+            ):
+                return
+            self._held[device_id] = packet
+            self._source_time[device_id] = source_time
+            updated[device_id] = True
+            return
+
+        if self._rng.random() < self._dropout_probability[device_id]:
+            return
+        self._held[device_id] = self._sample_device(
+            device_id,
+            self.layout.taxels.region_id,
+            self.layout.taxels.channel_id,
+        )
+        self._source_time[device_id] = source_time
+        updated[device_id] = True
+
+    def _finish_update(
+        self,
+        time: float,
+        updated: np.ndarray,
+    ) -> JuQiaoTactileFrame:
         self._last_update_time = float(time)
         for device_id in range(len(TACTILE_DEVICE_NAMES)):
             if time - self._source_time[device_id] > self._stale_timeout[device_id]:
@@ -517,6 +783,24 @@ class JuQiaoTactileAdapter:
             noise_std_counts=float(self._episode.device_noise_std_counts[device_id]),
             transfer=self.profile.transfer,
             rng=self._rng,
+        )
+        return packet
+
+    def _sample_v2_device(self, device_id: int, source_time: float) -> np.ndarray:
+        packet = np.zeros(TACTILE_DEVICE_DIM, dtype=np.uint8)
+        indices = self._device_taxel_indices[device_id]
+        response = (
+            self._response[indices]
+            + self._episode.taxel_residual_bias_counts[indices]
+            + self._noise_states[device_id].sample()
+            + self._drift_states[device_id].advance_to(source_time)
+        )
+        channels = self.layout.taxels.channel_id[indices]
+        packet[channels] = quantize_counts(
+            response,
+            noise_std_counts=0.0,
+            transfer=self.profile.transfer,
+            rng=None,
         )
         return packet
 
@@ -855,6 +1139,128 @@ def _validate_layout(
         channels = np.sort(layout.channel_id[layout.region_id == device_id])
         if not np.array_equal(channels, np.arange(TACTILE_DEVICE_DIM)):
             raise AssertionError("JuQiao sleeve must expose every channel once")
+
+
+def _garment_grid_topology(
+    layout: JuQiaoSkinLayout,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return garment-grid coordinates without changing layout serialization.
+
+    The vest consists of six electrically distinct rectangular patches. Each
+    sleeve is one continuous 16x16 patch, including its circular seam and the
+    upper-arm/forearm boundary. Coordinates follow the physical mount rather
+    than raw controller row order.
+    """
+
+    device_id = np.asarray(layout.taxels.region_id, dtype=np.int64).copy()
+    patch_id = np.full(len(layout.taxels), -1, dtype=np.int64)
+    grid_row = np.full(len(layout.taxels), -1, dtype=np.int64)
+    grid_col = np.full(len(layout.taxels), -1, dtype=np.int64)
+    wrap_columns = np.zeros(len(layout.taxels), dtype=bool)
+
+    vest_patches = ((6, 8), (5, 8), (2, 4), (1, 4), (2, 4), (1, 4))
+    vest_indices = np.flatnonzero(device_id == 0)
+    if len(vest_indices) != sum(rows * columns for rows, columns in vest_patches):
+        raise ValueError("JuQiao vest topology requires exactly 112 taxels")
+
+    vest_coordinates: dict[tuple[str, int], tuple[int, int, int]] = {}
+    for patch, (name, rows, columns, channels) in enumerate(_VEST_REGIONS):
+        for position, one_based_channel in enumerate(channels):
+            vest_coordinates[(name, one_based_channel - 1)] = (
+                patch,
+                position // columns,
+                position % columns,
+            )
+    known_vest_taxels = [
+        (layout.subregion[index], int(layout.taxels.channel_id[index]))
+        in vest_coordinates
+        for index in vest_indices
+    ]
+    if any(known_vest_taxels) and not all(known_vest_taxels):
+        raise ValueError("JuQiao vest topology is only partially identified")
+    if all(known_vest_taxels):
+        for index in vest_indices:
+            coordinate = vest_coordinates[
+                (layout.subregion[index], int(layout.taxels.channel_id[index]))
+            ]
+            patch_id[index], grid_row[index], grid_col[index] = coordinate
+    else:
+        # Minimal synthetic layouts used by adapter tests may omit physical
+        # subregion names. Their unique channels still provide stable ordering.
+        ordered = vest_indices[np.argsort(layout.taxels.channel_id[vest_indices])]
+        offset = 0
+        for patch, (rows, columns) in enumerate(vest_patches):
+            count = rows * columns
+            indices = ordered[offset : offset + count]
+            positions = np.arange(count, dtype=np.int64)
+            patch_id[indices] = patch
+            grid_row[indices] = positions // columns
+            grid_col[indices] = positions % columns
+            offset += count
+
+    raw_sleeve_coordinates = {
+        int(channel): divmod(raw_index, 16)
+        for raw_index, channel in enumerate(_SLEEVE_RAW_CHANNELS.flat)
+    }
+
+    for patch, (device, mount) in enumerate(
+        ((1, layout.left_mount), (2, layout.right_mount)),
+        start=len(vest_patches),
+    ):
+        indices = np.flatnonzero(device_id == device)
+        if len(indices) != TACTILE_DEVICE_DIM:
+            raise ValueError("JuQiao sleeve topology requires exactly 256 taxels")
+        for taxel_index in indices:
+            channel = int(layout.taxels.channel_id[taxel_index])
+            try:
+                raw_row, raw_column = raw_sleeve_coordinates[channel]
+            except KeyError as exc:
+                raise ValueError(
+                    "JuQiao sleeve channel is outside uint8 range"
+                ) from exc
+            axial, circular = mount.physical_indices(raw_row, raw_column)
+            patch_id[taxel_index] = patch
+            grid_row[taxel_index] = axial
+            grid_col[taxel_index] = circular
+            wrap_columns[taxel_index] = True
+
+    if np.any(patch_id < 0) or np.any(grid_row < 0) or np.any(grid_col < 0):
+        raise ValueError("JuQiao garment topology does not cover every taxel")
+    return tuple(
+        _readonly(value)
+        for value in (device_id, patch_id, grid_row, grid_col, wrap_columns)
+    )
+
+
+def _topology_sha256(
+    topology: tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
+    channel_id: np.ndarray,
+) -> str:
+    records = np.column_stack(
+        (
+            *topology[:-1],
+            topology[-1].astype(np.int64),
+            np.asarray(channel_id, dtype=np.int64),
+        )
+    )
+    order = np.lexsort(tuple(records[:, column] for column in reversed(range(6))))
+    digest = hashlib.sha256()
+    digest.update(records[order].astype("<i8", copy=False).tobytes())
+    return digest.hexdigest()
+
+
+def _component_seed(episode_seed: int, tag: int, device_id: int) -> int:
+    """Derive a stable uint64 stream seed without consuming another stream."""
+
+    state = np.random.SeedSequence(
+        [
+            episode_seed & 0xFFFFFFFF,
+            episode_seed >> 32,
+            tag,
+            device_id,
+        ]
+    ).generate_state(2, dtype=np.uint32)
+    return int(state[0]) | (int(state[1]) << 32)
 
 
 def _readonly(array: np.ndarray) -> np.ndarray:

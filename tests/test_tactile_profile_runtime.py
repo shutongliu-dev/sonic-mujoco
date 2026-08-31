@@ -49,8 +49,14 @@ def write_profile(path: Path, *, layout_sha256: str | None = None) -> str:
 class TactileProfileRuntimeTest(unittest.TestCase):
     def test_repository_profile_matches_current_g1_skin(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        profile = load_tactile_calibration_profile(
-            root / "configs" / "tactile" / "juqiao_g1_sim2real_provisional_v1.json"
+        profiles = tuple(
+            load_tactile_calibration_profile(
+                root
+                / "configs"
+                / "tactile"
+                / f"juqiao_g1_sim2real_provisional_v{version}.json"
+            )
+            for version in (1, 2)
         )
         scenes = (
             *ENVIRONMENTS.items(),
@@ -59,21 +65,29 @@ class TactileProfileRuntimeTest(unittest.TestCase):
                 lambda: MujocoG1LabScanEnv(collision_geometry="boxes"),
             ),
         )
-        for scene, create_env in scenes:
-            with self.subTest(scene=scene):
-                env = create_env()
-                try:
-                    env.configure_tactile_profile(profile, seed=0)
-                    self.assertEqual(
-                        profile.layout_sha256,
-                        env.tactile_skin_layout.sha256,
-                    )
-                    self.assertEqual(
-                        env.tactile_adapter.metadata["calibration_status"],
-                        "provisional_unpaired_force_mapping",
-                    )
-                finally:
-                    env.close()
+        for profile in profiles:
+            for scene, create_env in scenes:
+                with self.subTest(profile=profile.profile_id, scene=scene):
+                    env = create_env()
+                    try:
+                        env.configure_tactile_profile(profile, seed=0)
+                        self.assertEqual(
+                            profile.layout_sha256,
+                            env.tactile_skin_layout.sha256,
+                        )
+                        self.assertEqual(
+                            env.tactile_adapter.metadata["calibration_status"],
+                            "provisional_unpaired_force_mapping",
+                        )
+                        if profile.schema_version == 2:
+                            self.assertEqual(
+                                env.tactile_adapter.metadata["sensor_dynamics"][
+                                    "status"
+                                ],
+                                "provisional_unpaired_sensor_dynamics",
+                            )
+                    finally:
+                        env.close()
 
     def test_runner_parsers_share_one_tactile_profile_flag(self) -> None:
         profile = Path("calibration/profile.json")
@@ -108,7 +122,7 @@ class TactileProfileRuntimeTest(unittest.TestCase):
     def test_scene_seed_reproduces_tactile_episode(self) -> None:
         root = Path(__file__).resolve().parents[1]
         profile = load_tactile_calibration_profile(
-            root / "configs" / "tactile" / "juqiao_g1_sim2real_provisional_v1.json"
+            root / "configs" / "tactile" / "juqiao_g1_sim2real_provisional_v2.json"
         )
         env = MujocoG1SweepEnv()
         self.addCleanup(env.close)
