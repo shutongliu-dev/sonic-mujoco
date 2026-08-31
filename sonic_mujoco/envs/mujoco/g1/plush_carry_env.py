@@ -28,14 +28,7 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
 
     def __init__(self, timestep: float = 0.005) -> None:
         package_root = Path(__file__).resolve().parents[3]
-        scene = (
-            package_root
-            / "assets"
-            / "mujoco"
-            / "scenes"
-            / "g1"
-            / "plush_carry.xml"
-        )
+        scene = package_root / "assets" / "mujoco" / "scenes" / "g1" / "plush_carry.xml"
         super().__init__(scene, timestep)
 
         self._robot_qpos = self._freejoint_qpos_address("floating_base_joint")
@@ -47,9 +40,7 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
             [self._body_id("source_table"), self._body_id("target_table")]
         )
         self._base_table_mass = self.model.body_mass[self._table_body_ids].copy()
-        self._base_table_inertia = self.model.body_inertia[
-            self._table_body_ids
-        ].copy()
+        self._base_table_inertia = self.model.body_inertia[self._table_body_ids].copy()
         self._table_geom_ids = np.flatnonzero(
             np.isin(self.model.geom_bodyid, self._table_body_ids)
             & (self.model.geom_contype != 0)
@@ -74,27 +65,19 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
                     vertex_address : vertex_address + vertex_count
                 ]
             )
-            self._plush_body_ids = self._plush_body_ids[
-                self._plush_body_ids > 0
-            ]
+            self._plush_body_ids = self._plush_body_ids[self._plush_body_ids > 0]
         self._plush_body_ids = np.concatenate(
             ([self._plush_root_id], self._plush_body_ids)
         )
-        self._base_plush_mass = self.model.body_mass[
-            self._plush_body_ids
-        ].copy()
-        self._base_plush_inertia = self.model.body_inertia[
-            self._plush_body_ids
-        ].copy()
+        self._base_plush_mass = self.model.body_mass[self._plush_body_ids].copy()
+        self._base_plush_inertia = self.model.body_inertia[self._plush_body_ids].copy()
         self._flex_equality_id = int(
             np.flatnonzero(
                 (self.model.eq_type == mujoco.mjtEq.mjEQ_FLEX)
                 & (self.model.eq_obj1id == self._flex_id)
             )[0]
         )
-        self._base_flex_solref = self.model.eq_solref[
-            self._flex_equality_id
-        ].copy()
+        self._base_flex_solref = self.model.eq_solref[self._flex_equality_id].copy()
         self._vertex_slice = slice(
             int(self.model.flex_vertadr[self._flex_id]),
             int(self.model.flex_vertadr[self._flex_id])
@@ -106,7 +89,7 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
         self._plush_friction = float(self.model.flex_friction[self._flex_id, 0])
 
     def reset(self, seed: int | None = None) -> None:
-        super().reset()
+        super().reset(seed=seed)
         rng = np.random.default_rng(seed)
         self._randomize_physics(rng)
         self._place_scene(rng)
@@ -136,9 +119,7 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
     def _randomize_physics(self, rng: np.random.Generator) -> None:
         self._plush_mass = rng.uniform(0.9, 2.0)
         mass_scale = self._plush_mass / self._base_plush_mass.sum()
-        self.model.body_mass[self._plush_body_ids] = (
-            self._base_plush_mass * mass_scale
-        )
+        self.model.body_mass[self._plush_body_ids] = self._base_plush_mass * mass_scale
         self.model.body_inertia[self._plush_body_ids] = (
             self._base_plush_inertia * mass_scale
         )
@@ -147,9 +128,7 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
         self._plush_friction = rng.uniform(0.60, 0.95)
 
         table_scale = rng.uniform(0.95, 1.05)
-        self.model.body_mass[self._table_body_ids] = (
-            self._base_table_mass * table_scale
-        )
+        self.model.body_mass[self._table_body_ids] = self._base_table_mass * table_scale
         self.model.body_inertia[self._table_body_ids] = (
             self._base_table_inertia * table_scale
         )
@@ -162,26 +141,16 @@ class MujocoG1PlushCarryEnv(MujocoG1Env):
         self.model.flex_friction[self._flex_id, 0] = self._plush_friction
 
     def _place_scene(self, rng: np.random.Generator) -> None:
-        source = np.array(
-            [rng.uniform(0.90, 1.00), rng.uniform(-2.54, -2.38), 0.0]
-        )
-        target = np.array(
-            [rng.uniform(0.90, 1.05), rng.uniform(2.38, 2.56), 0.0]
-        )
-        self._set_freejoint(
-            self._source_qpos, source, rng.uniform(-0.05, 0.05)
-        )
-        self._set_freejoint(
-            self._target_qpos, target, rng.uniform(-0.05, 0.05)
-        )
+        source = np.array([rng.uniform(0.90, 1.00), rng.uniform(-2.54, -2.38), 0.0])
+        target = np.array([rng.uniform(0.90, 1.05), rng.uniform(2.38, 2.56), 0.0])
+        self._set_freejoint(self._source_qpos, source, rng.uniform(-0.05, 0.05))
+        self._set_freejoint(self._target_qpos, target, rng.uniform(-0.05, 0.05))
         plush = source + (
             rng.uniform(-0.04, 0.04),
             rng.uniform(-0.04, 0.04),
             self.TABLE_TOP_HEIGHT + self.PLUSH_HALF_HEIGHT,
         )
-        self._set_freejoint(
-            self._plush_qpos, plush, rng.uniform(-0.16, 0.16)
-        )
+        self._set_freejoint(self._plush_qpos, plush, rng.uniform(-0.16, 0.16))
         robot = np.array(
             [
                 source[0] + rng.uniform(-0.08, 0.08),

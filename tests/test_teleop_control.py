@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from scripts.run_pico_teleop import _append_recording
@@ -71,6 +72,22 @@ def append_frame(
         video_frame=video_frame,
         camera_pose=camera_pose,
         appearance_camera_pose=appearance_camera_pose,
+    )
+
+
+def append_tactile_frame(recorder: EpisodeRecorder, env: MujocoG1EmptyEnv) -> None:
+    recorder.append(
+        time=env.time,
+        qpos=env.data.qpos,
+        qvel=env.data.qvel,
+        ctrl=env.data.ctrl,
+        command=command(),
+        token=np.arange(64),
+        action=np.arange(29),
+        controls=PicoControls(),
+        contacts=env.contacts.last_frame,
+        tactile=env.tactile.last_frame,
+        tactile_suit=env.tactile_adapter.last_frame,
     )
 
 
@@ -215,20 +232,10 @@ class TeleopControlTest(unittest.TestCase):
                 tactile_layout=env.tactile_skin_layout,
                 tactile_metadata=env.tactile_adapter.metadata,
             )
-            recorder.start()
-            recorder.append(
-                time=env.time,
-                qpos=env.data.qpos,
-                qvel=env.data.qvel,
-                ctrl=env.data.ctrl,
-                command=command(),
-                token=np.arange(64),
-                action=np.arange(29),
-                controls=PicoControls(),
-                contacts=env.contacts.last_frame,
-                tactile=env.tactile.last_frame,
-                tactile_suit=env.tactile_suit,
-            )
+            with self.assertRaisesRegex(ValueError, "current sensor metadata"):
+                recorder.start()
+            recorder.start(tactile_metadata=env.tactile_adapter.metadata)
+            append_tactile_frame(recorder, env)
             path = recorder.finish()
 
             assert path is not None
@@ -237,6 +244,10 @@ class TeleopControlTest(unittest.TestCase):
                 key = f"observation.tactile_{device}"
                 self.assertIn(key, table.column_names)
                 self.assertEqual(len(table[key][0].as_py()), 256)
+                self.assertTrue(pa.types.is_list(table.schema.field(key).type))
+                self.assertTrue(
+                    pa.types.is_uint8(table.schema.field(key).type.value_type)
+                )
             self.assertIn("observation.tactile.normal_force_n", table.column_names)
             self.assertIn(
                 "observation.tactile.tangent_force_body_n", table.column_names
@@ -289,7 +300,7 @@ class TeleopControlTest(unittest.TestCase):
                 ),
                 region_names=env.tactile.last_frame.layout.region_names,
             )
-            recorder.start()
+            recorder.start(tactile_metadata=env.tactile_adapter.metadata)
             with self.assertRaisesRegex(ValueError, "does not match layout"):
                 recorder.append(
                     time=env.time,
@@ -304,6 +315,75 @@ class TeleopControlTest(unittest.TestCase):
                     tactile=replace(env.tactile.last_frame, layout=bad_layout),
                     tactile_suit=env.tactile_suit,
                 )
+
+    def test_recorder_tracks_realized_tactile_profile_per_episode(self) -> None:
+        env = MujocoG1EmptyEnv()
+        self.addCleanup(env.close)
+        with tempfile.TemporaryDirectory() as directory:
+            recorder = EpisodeRecorder(
+                directory,
+                "empty",
+                body_names=env.contacts.body_names,
+                record_video=False,
+                tactile_layout=env.tactile_skin_layout,
+                tactile_metadata=env.tactile_adapter.metadata,
+            )
+            paths = []
+            for seed in (11, 12):
+                env.tactile_adapter.reset(seed=seed)
+                recorder.start(tactile_metadata=env.tactile_adapter.metadata)
+                append_tactile_frame(recorder, env)
+                paths.append(recorder.finish())
+
+            assert paths[-1] is not None
+            session = paths[-1].parents[2]
+            episodes = [
+                json.loads(line)
+                for line in (session / "meta/episodes.jsonl").read_text().splitlines()
+            ]
+            info = json.loads((session / "meta/info.json").read_text())
+
+            self.assertEqual(
+                [episode["tactile"]["episode_seed"] for episode in episodes],
+                [11, 12],
+            )
+            self.assertNotEqual(
+                episodes[0]["tactile"]["episode_profile"]["sha256"],
+                episodes[1]["tactile"]["episode_profile"]["sha256"],
+            )
+            self.assertEqual(
+                set(episodes[0]["tactile"]),
+                {
+                    "episode_profile",
+                    "episode_seed",
+                    "realized_device_sample_rate_hz",
+                    "taxel_gain_sha256",
+                },
+            )
+            self.assertEqual(
+                info["script_config"]["tactile"]["episode_metadata"],
+                "meta/episodes.jsonl[].tactile",
+            )
+            self.assertNotIn(
+                "episode_seed",
+                info["script_config"]["tactile"],
+            )
+
+            changed_profile = dict(env.tactile_adapter.metadata)
+            changed_profile["profile_sha256"] = "0" * 64
+            with self.assertRaisesRegex(ValueError, "cannot change within one session"):
+                recorder.start(tactile_metadata=changed_profile)
+
+            static_only = dict(env.tactile_adapter.metadata)
+            for key in (
+                "episode_profile",
+                "episode_seed",
+                "realized_device_sample_rate_hz",
+                "taxel_gain_sha256",
+            ):
+                static_only.pop(key)
+            with self.assertRaisesRegex(ValueError, "metadata is missing"):
+                recorder.start(tactile_metadata=static_only)
 
     def test_video_throttle_holds_rgb_without_dropping_tactile_rows(self) -> None:
         env = MujocoG1EmptyEnv()
@@ -331,7 +411,7 @@ class TeleopControlTest(unittest.TestCase):
                 tactile_layout=env.tactile_skin_layout,
                 tactile_metadata=env.tactile_adapter.metadata,
             )
-            recorder.start()
+            recorder.start(tactile_metadata=env.tactile_adapter.metadata)
             for _ in range(2):
                 _append_recording(
                     recorder,

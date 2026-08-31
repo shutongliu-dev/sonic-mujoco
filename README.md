@@ -84,7 +84,15 @@ MUJOCO_GL=egl .venv/bin/python scripts/run_gr00t_sweep.py --seed 0
 脚本使用双目第一视角、SONIC decoder 和 Sweep 成功判定执行 20 秒闭环评测，
 结果、首末帧和 `rollout.mp4` 保存在 `results/gr00t_sweep/`。视频左侧是第三人称
 视角，右侧是 Policy 的左眼画面。Policy 的 `vest`、`left_arm`、`right_arm`
-三个触觉输入直接来自 MuJoCo 逻辑皮肤；没有接触时保持真机同格式的零值基线。
+三个触觉输入直接来自 MuJoCo 逻辑皮肤；未显式加载 profile 时，没有接触会保持
+真机同格式的零值基线。
+需要模拟真机的异步采样、低幅底噪和设备差异时，可显式加载版本化 profile：
+
+```bash
+MUJOCO_GL=egl .venv/bin/python scripts/run_gr00t_sweep.py \
+  --seed 0 \
+  --tactile-profile configs/tactile/juqiao_g1_sim2real_provisional_v1.json
+```
 
 也可以通过 `SONIC_POLICY_DIR` 改变默认模型目录，或用 `--encoder`、`--decoder`
 分别指定模型文件。
@@ -433,6 +441,10 @@ anchor、相机内参、重建比例和视觉来源。接触字段包括机器�
 - 物理侧车：每个有效 taxel 的牛顿力、牛顿秒冲量、接触物体、采样次数和未映射
   接触诊断，供标定、回放和重新生成真机兼容值。
 
+启用 Sim2Real profile 后，每条 `meta/episodes.jsonl` 还会保存该 episode 实际抽到
+的 seed、设备采样率和参数哈希；session 级 metadata 只保留静态 profile，避免连续
+采集多条 episode 时把第一条的随机化参数误写到后续数据。
+
 一次进程可连续采集多条 episode。结束一条后终端会输出文件位置、帧数和时长；
 保存期间 PICO 持续收到最后一帧，画面不会因编码和落盘而断流。
 
@@ -458,6 +470,37 @@ anchor、相机内参、重建比例和视觉来源。接触字段包括机器�
 metadata 会明确标记为 provisional。训练可以直接使用与真机同形状的 8-bit 字段，
 同时保留物理量侧车；完成砝码或测力台标定后只需替换 gain/offset/gamma，不必
 重新仿真。
+
+仓库提供的
+`configs/tactile/juqiao_g1_sim2real_provisional_v1.json` 只对齐已知的真机接口和
+传感器侧行为：三路独立约 14 Hz 采样、100 ms stale、sample-and-hold、8% 通道
+固定灵敏度差异、每 episode 额外 ±8% gain 域随机化，以及保守的 raw-count 底噪。
+两层 gain 会合成约 0.85–1.17 倍的覆盖范围。它不会把任务数据的边际分布冒充力标定，
+因此 profile 中仍明确写着 `provisional_unpaired_force_mapping`。PICO 遥操同样用
+一个参数启用：
+
+```bash
+.venv/bin/python scripts/run_pico_teleop.py \
+  --scene sweep \
+  --tactile-profile configs/tactile/juqiao_g1_sim2real_provisional_v1.json
+```
+
+可以用真实或仿真 LeRobot 数据集运行匿名分布审计：
+
+```bash
+.venv/bin/python scripts/audit_tactile_sim2real.py \
+  /path/to/lerobot_dataset \
+  --label real_clean \
+  --output results/tactile_sim2real/real_clean.json
+```
+
+报告包含重复帧率、可观察更新率下界、零包率、有效通道数、raw-count 分位数和
+静默包逐通道统计；不包含原始触觉帧或输入绝对路径，并默认跳过 metadata 中标记
+为 discarded 的 episode。静默统计会分别报告“包含全零包”和“仅非零包”两组，
+因为全零既可能是无接触，也可能是 stale 补零；两组都可能混合衣物预载、基线
+漂移和未标注接触，所以只用于配置 count 域噪声，不能用于拟合 N/kPa 到 count
+的传递曲线。该曲线需要同步记录测力台读数、接触面积和原始三路触觉包后再标定。
+若直接审计没有 `meta/info.json` 的单个 Parquet 文件，必须显式传入 `--fps`。
 
 可用一个沿 G1 胸前滑动的 8 N 小箱子运行独立验收：
 

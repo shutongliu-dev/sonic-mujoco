@@ -23,6 +23,7 @@ from sonic_mujoco.envs.mujoco.g1 import (
 )
 from sonic_mujoco.recording import EpisodeRecorder
 from sonic_mujoco.superdex import HandCommandPublisher
+from sonic_mujoco.tactile_calibration import load_tactile_calibration_profile
 from sonic_mujoco.teleop import (
     ContactHaptics,
     PicoControls,
@@ -127,6 +128,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--record-dir", type=Path, default=Path("records"))
     parser.add_argument("--no-record-video", action="store_true")
+    parser.add_argument(
+        "--tactile-profile",
+        type=Path,
+        help="versioned tactile Sim2Real profile applied to hardware-shaped packets",
+    )
+    parser.add_argument(
+        "--tactile-seed",
+        type=int,
+        default=0,
+        help="base seed for repeatable virtual tactile-sensor variation",
+    )
     parser.add_argument("--task")
     parser.add_argument(
         "--scene",
@@ -192,12 +204,21 @@ def _validate_arguments(args: argparse.Namespace) -> None:
 
 
 def _create_environment(args: argparse.Namespace) -> MujocoG1Env:
+    profile = (
+        load_tactile_calibration_profile(args.tactile_profile)
+        if args.tactile_profile is not None
+        else None
+    )
     if args.scene == "lab_scan":
-        return MujocoG1LabScanEnv(
+        env = MujocoG1LabScanEnv(
             collision_geometry=args.scan_collision,
             collision_path=args.scan_collision_manifest,
         )
-    return ENVIRONMENTS[args.scene]()
+    else:
+        env = ENVIRONMENTS[args.scene]()
+    if profile is not None:
+        env.configure_tactile_profile(profile, seed=args.tactile_seed)
+    return env
 
 
 def _create_video(
@@ -449,7 +470,7 @@ class _TeleopSession:
         if recorder.active:
             _finish_recording(recorder)
         elif self.mode is TeleopMode.POSE:
-            recorder.start()
+            recorder.start(tactile_metadata=self.resources.env.tactile_adapter.metadata)
             if isinstance(self.resources.env, MujocoG1BasketLoadingEnv):
                 self.resources.env.start_loading()
             print("Recording started.")

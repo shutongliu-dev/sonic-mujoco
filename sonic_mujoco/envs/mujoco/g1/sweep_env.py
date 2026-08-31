@@ -61,7 +61,7 @@ class MujocoG1SweepEnv(MujocoG1Env):
         ].copy()
 
     def reset(self, seed: int | None = None) -> None:
-        super().reset()
+        super().reset(seed=seed)
         rng = np.random.default_rng(seed)
         self._randomize_physics(rng)
         positions = SPAWN_POSITIONS.copy()

@@ -2,6 +2,7 @@ import html
 import json
 import shutil
 from collections import Counter
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
 from fractions import Fraction
@@ -54,6 +55,21 @@ _CONTACT_FIELDS = (
     "sample_count",
     "count",
 )
+
+_EPISODE_TACTILE_METADATA_FIELDS = (
+    "episode_profile",
+    "episode_seed",
+    "realized_device_sample_rate_hz",
+    "taxel_gain_sha256",
+)
+
+
+def _static_tactile_metadata(metadata: dict) -> dict:
+    return {
+        key: value
+        for key, value in metadata.items()
+        if key not in _EPISODE_TACTILE_METADATA_FIELDS
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,14 +244,10 @@ class EpisodeRecorder:
         self.video_source = video_source
         self.video_metadata = dict(video_metadata or {})
         self.tactile_layout = tactile_layout
+        if tactile_layout is not None and tactile_metadata is None:
+            raise ValueError("tactile layout requires sensor metadata")
         self.tactile_metadata = dict(tactile_metadata or {})
-        tactile_record_rate = self.tactile_metadata.get("record_rate_hz")
-        if (
-            tactile_layout is not None
-            and tactile_record_rate is not None
-            and not np.isclose(float(tactile_record_rate), fps)
-        ):
-            raise ValueError("tactile record rate must match episode fps")
+        self._validate_tactile_metadata(self.tactile_metadata)
         self._frames: list[dict[str, np.ndarray | float | int]] = []
         self._session: Path | None = None
         self._video: _VideoWriter | None = None
@@ -243,6 +255,7 @@ class EpisodeRecorder:
         self._episodes: list[dict] = []
         self._stats: list[dict] = []
         self._features: dict | None = None
+        self._active_tactile_metadata: dict | None = None
         self.active = False
         self.last_preview: Path | None = None
 
@@ -258,7 +271,36 @@ class EpisodeRecorder:
     def duration_seconds(self) -> float:
         return self.frame_count / self.fps
 
-    def start(self) -> None:
+    def start(self, *, tactile_metadata: dict | None = None) -> None:
+        if tactile_metadata is not None and self.tactile_layout is None:
+            raise ValueError("tactile metadata requires a configured tactile layout")
+        if self.tactile_layout is not None and tactile_metadata is None:
+            raise ValueError("each tactile episode requires current sensor metadata")
+        episode_metadata = tactile_metadata or {}
+        self._validate_tactile_metadata(episode_metadata)
+        missing_episode_fields = [
+            key
+            for key in _EPISODE_TACTILE_METADATA_FIELDS
+            if key not in episode_metadata
+        ]
+        if self.tactile_layout is not None and missing_episode_fields:
+            raise ValueError(
+                "tactile episode metadata is missing: "
+                + ", ".join(missing_episode_fields)
+            )
+        if _static_tactile_metadata(episode_metadata) != _static_tactile_metadata(
+            self.tactile_metadata
+        ):
+            raise ValueError("tactile profile cannot change within one session")
+        self._active_tactile_metadata = (
+            {
+                key: deepcopy(episode_metadata[key])
+                for key in _EPISODE_TACTILE_METADATA_FIELDS
+                if key in episode_metadata
+            }
+            if self.tactile_layout is not None
+            else None
+        )
         self._frames.clear()
         self.active = True
 
@@ -346,6 +388,7 @@ class EpisodeRecorder:
             return None
         self.active = False
         if not self._frames:
+            self._active_tactile_metadata = None
             return None
         assert self._session is not None
         episode_index = len(self._episodes)
@@ -357,13 +400,14 @@ class EpisodeRecorder:
             self._video.close()
             self._video = None
 
-        self._episodes.append(
-            {
-                "episode_index": episode_index,
-                "tasks": [self.task],
-                "length": len(self._frames),
-            }
-        )
+        episode = {
+            "episode_index": episode_index,
+            "tasks": [self.task],
+            "length": len(self._frames),
+        }
+        if self._active_tactile_metadata is not None:
+            episode["tactile"] = self._active_tactile_metadata
+        self._episodes.append(episode)
         self._stats.append(
             {"episode_index": episode_index, "stats": self._episode_stats(arrays)}
         )
@@ -372,11 +416,13 @@ class EpisodeRecorder:
         self.last_preview = self._write_contact_preview(episode_index, arrays)
         self._frames.clear()
         self._video_path = None
+        self._active_tactile_metadata = None
         return data_path
 
     def abort(self) -> None:
         self.active = False
         self._frames.clear()
+        self._active_tactile_metadata = None
         if self._video is not None and self._video_path is not None:
             self._video.cancel(self._video_path)
             self._video = None
@@ -447,10 +493,17 @@ class EpisodeRecorder:
             ) from exc
 
         columns = {}
+        tactile_keys = {f"observation.tactile_{name}" for name in TACTILE_DEVICE_NAMES}
         for key, values in arrays.items():
             values = np.asarray(values)
             if values.ndim == 1:
                 columns[key] = pa.array(values)
+                continue
+            if key in tactile_keys:
+                columns[key] = pa.array(
+                    values.tolist(),
+                    type=pa.list_(pa.uint8()),
+                )
                 continue
             width = int(np.prod(values.shape[1:]))
             flat = pa.array(values.reshape(-1))
@@ -529,7 +582,7 @@ class EpisodeRecorder:
                 "contact_body_names": list(self.body_names),
                 "tactile": (
                     {
-                        **self.tactile_metadata,
+                        **_static_tactile_metadata(self.tactile_metadata),
                         "layout_sha256": self.tactile_layout.sha256,
                         "physical_units": {
                             "force": "N",
@@ -540,6 +593,7 @@ class EpisodeRecorder:
                             f"observation.tactile_{name}"
                             for name in TACTILE_DEVICE_NAMES
                         ],
+                        "episode_metadata": "meta/episodes.jsonl[].tactile",
                     }
                     if self.tactile_layout is not None
                     else None
@@ -604,6 +658,16 @@ class EpisodeRecorder:
         self._write_jsonl(meta / "tasks.jsonl", [{"task_index": 0, "task": self.task}])
         self._write_jsonl(meta / "episodes.jsonl", self._episodes)
         self._write_jsonl(meta / "episodes_stats.jsonl", self._stats)
+
+    def _validate_tactile_metadata(self, metadata: dict) -> None:
+        if self.tactile_layout is None:
+            return
+        record_rate = metadata.get("record_rate_hz")
+        if record_rate is not None and not np.isclose(float(record_rate), self.fps):
+            raise ValueError("tactile record rate must match episode fps")
+        layout_sha256 = metadata.get("layout_sha256")
+        if layout_sha256 is not None and layout_sha256 != self.tactile_layout.sha256:
+            raise ValueError("tactile metadata does not match the configured layout")
 
     @staticmethod
     def _write_jsonl(path: Path, rows: list[dict]) -> None:

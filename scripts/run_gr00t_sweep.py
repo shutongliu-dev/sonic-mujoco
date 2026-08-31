@@ -18,6 +18,7 @@ from sonic_mujoco.gr00t import (
     projected_gravity,
     save_image,
 )
+from sonic_mujoco.tactile_calibration import load_tactile_calibration_profile
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -38,6 +39,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--video-fps", type=int, default=10)
     parser.add_argument("--no-video", action="store_true")
+    parser.add_argument(
+        "--tactile-profile",
+        type=Path,
+        help="versioned tactile Sim2Real profile applied to policy packets",
+    )
     parser.add_argument("--output-dir", type=Path, default=ROOT / "results/gr00t_sweep")
     return parser.parse_args()
 
@@ -51,12 +57,19 @@ def has_fallen(state) -> bool:
 
 def main() -> None:
     args = parse_args()
+    tactile_profile = (
+        load_tactile_calibration_profile(args.tactile_profile)
+        if args.tactile_profile is not None
+        else None
+    )
     run_dir = args.output_dir / datetime.now().astimezone().strftime(
         "%Y-%m-%d-%H-%M-%S"
     )
     run_dir.mkdir(parents=True)
 
     env = MujocoG1SweepEnv()
+    if tactile_profile is not None:
+        env.configure_tactile_profile(tactile_profile, seed=args.seed)
     controller = SonicController.from_onnx(args.decoder)
     camera = StereoCamera(env.model, env.data)
     policy = Gr00tClient(args.host, args.port)
@@ -155,6 +168,7 @@ def main() -> None:
             "control_steps": completed,
             "sim_seconds": completed / 50,
             "policy_requests": action_chunks,
+            "tactile": env.tactile_adapter.metadata,
             "motion_token_range": ([token_min, token_max] if action_chunks else None),
             "final_base_position": robot.base_position.tolist(),
             "final_projected_gravity": projected_gravity(

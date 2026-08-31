@@ -23,14 +23,7 @@ class MujocoG1ChairLeanEnv(MujocoG1Env):
 
     def __init__(self, timestep: float = 0.005) -> None:
         package_root = Path(__file__).resolve().parents[3]
-        scene = (
-            package_root
-            / "assets"
-            / "mujoco"
-            / "scenes"
-            / "g1"
-            / "chair_lean.xml"
-        )
+        scene = package_root / "assets" / "mujoco" / "scenes" / "g1" / "chair_lean.xml"
         super().__init__(scene, timestep)
 
         self._robot_qpos = self._freejoint_qpos_address("floating_base_joint")
@@ -44,16 +37,14 @@ class MujocoG1ChairLeanEnv(MujocoG1Env):
         )
         self._base_mass = float(self.model.body_mass[self._chair_body_id])
         self._base_inertia = self.model.body_inertia[self._chair_body_id].copy()
-        self._base_friction = self.model.geom_friction[
-            self._chair_geom_ids
-        ].copy()
+        self._base_friction = self.model.geom_friction[self._chair_geom_ids].copy()
         self._backrest_width = 0.51
         self._backrest_height = 0.31
         self._backrest_tilt = np.deg2rad(10.0)
         self._backrest_softness = 0.035
 
     def reset(self, seed: int | None = None) -> None:
-        super().reset()
+        super().reset(seed=seed)
         rng = np.random.default_rng(seed)
         self._randomize_chair(rng)
         self._place_chair_and_robot(rng)
@@ -107,9 +98,7 @@ class MujocoG1ChairLeanEnv(MujocoG1Env):
 
         mass_scale = rng.uniform(0.9, 1.1)
         self.model.body_mass[self._chair_body_id] = self._base_mass * mass_scale
-        self.model.body_inertia[self._chair_body_id] = (
-            self._base_inertia * mass_scale
-        )
+        self.model.body_inertia[self._chair_body_id] = self._base_inertia * mass_scale
         friction_scale = rng.uniform(0.9, 1.1)
         self.model.geom_friction[self._chair_geom_ids] = (
             self._base_friction * friction_scale

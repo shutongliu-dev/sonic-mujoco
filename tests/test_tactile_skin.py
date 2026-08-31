@@ -1,3 +1,4 @@
+import hashlib
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -5,7 +6,7 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv
+from sonic_mujoco.envs.mujoco.g1 import MujocoG1EmptyEnv, MujocoG1SweepEnv
 from sonic_mujoco.tactile import TactileRecorder
 from sonic_mujoco.tactile_skin import (
     TACTILE_DEVICE_DIM,
@@ -47,6 +48,50 @@ class JuQiaoTactileSkinTest(unittest.TestCase):
                 np.sort(layout.channel_id[layout.region_id == device_id]),
                 np.arange(TACTILE_DEVICE_DIM),
             )
+            np.testing.assert_array_equal(
+                layout.channel_id[layout.region_id == device_id],
+                np.r_[np.arange(128, 256), np.arange(128)],
+            )
+        self.assertEqual(
+            skin.subregion[:112],
+            (
+                *("front_chest",) * 48,
+                *("back",) * 40,
+                *("left_arm",) * 8,
+                *("left_shoulder",) * 4,
+                *("right_arm",) * 8,
+                *("right_shoulder",) * 4,
+            ),
+        )
+        np.testing.assert_array_equal(
+            layout.channel_id[:112][-24:],
+            [
+                78,
+                94,
+                110,
+                126,
+                79,
+                95,
+                111,
+                127,
+                8,
+                24,
+                40,
+                56,
+                176,
+                161,
+                145,
+                129,
+                177,
+                160,
+                144,
+                128,
+                248,
+                232,
+                216,
+                200,
+            ],
+        )
 
     def test_vest_routes_every_collidable_torso_shell(self) -> None:
         skin = build_juqiao_skin_layout(self.env.model)
@@ -198,6 +243,75 @@ class JuQiaoTactileSkinTest(unittest.TestCase):
         )
 
         self.assertNotEqual(base.sha256, shifted.sha256)
+
+    def test_layout_hash_is_stable_across_scenes(self) -> None:
+        sweep = MujocoG1SweepEnv()
+        self.addCleanup(sweep.close)
+
+        empty = build_juqiao_skin_layout(self.env.model)
+        sweep_layout = build_juqiao_skin_layout(sweep.model)
+
+        self.assertFalse(
+            np.array_equal(empty.taxels.geom_id, sweep_layout.taxels.geom_id)
+        )
+        self.assertEqual(empty.sha256, sweep_layout.sha256)
+
+    def test_default_seed_keeps_legacy_manufacturing_variation(self) -> None:
+        skin = build_juqiao_skin_layout(self.env.model)
+        adapter = JuQiaoTactileAdapter(skin, seed=37)
+        rng = np.random.default_rng(37)
+        expected_rates = 14.0 * rng.uniform(0.92, 1.08, 3)
+        old_order_gains = rng.uniform(0.92, 1.08, len(skin.taxels))
+        legacy_index = np.r_[
+            np.arange(88),
+            np.arange(92, 100),
+            np.arange(88, 92),
+            np.arange(104, 112),
+            np.arange(100, 104),
+            np.arange(112, len(skin.taxels)),
+        ]
+        expected_gains = old_order_gains[legacy_index]
+        expected_gain_sha256 = hashlib.sha256(
+            expected_gains.astype("<f8", copy=False).tobytes()
+        ).hexdigest()
+
+        np.testing.assert_array_equal(
+            adapter.metadata["realized_device_sample_rate_hz"],
+            expected_rates,
+        )
+        self.assertEqual(
+            adapter.metadata["taxel_gain_sha256"],
+            expected_gain_sha256,
+        )
+
+        channel_248 = int(
+            np.flatnonzero(
+                (skin.taxels.region_id == 0) & (skin.taxels.channel_id == 248)
+            )[0]
+        )
+        force = np.zeros(len(skin.taxels))
+        force[channel_248] = 20.0
+        recorder = TactileRecorder(self.env.model, layout=skin.taxels)
+        frame = replace(recorder.last_frame, normal_force=force)
+        packet = adapter.update(frame, time=0.0).device("vest")
+        self.assertEqual(
+            packet[248],
+            round(20.0 * 4.0 * old_order_gains[100]),
+        )
+
+    def test_default_adapter_keeps_legacy_source_timestamps(self) -> None:
+        skin = build_juqiao_skin_layout(self.env.model)
+        recorder = TactileRecorder(self.env.model, layout=skin.taxels)
+        adapter = JuQiaoTactileAdapter(skin)
+
+        for time in (0.0, 0.02, 0.04, 0.06, 0.08):
+            sample = adapter.update(recorder.last_frame, time)
+
+        np.testing.assert_array_equal(sample.source_time, [0.08, 0.04, 0.06])
+        self.assertEqual(
+            adapter.metadata["calibration_status"],
+            "provisional_until_force_fixture_calibration",
+        )
 
 
 if __name__ == "__main__":

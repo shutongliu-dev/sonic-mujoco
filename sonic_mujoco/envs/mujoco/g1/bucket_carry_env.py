@@ -28,12 +28,7 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
     def __init__(self, timestep: float = 0.005) -> None:
         package_root = Path(__file__).resolve().parents[3]
         scene = (
-            package_root
-            / "assets"
-            / "mujoco"
-            / "scenes"
-            / "g1"
-            / "bucket_carry.xml"
+            package_root / "assets" / "mujoco" / "scenes" / "g1" / "bucket_carry.xml"
         )
         super().__init__(scene, timestep)
 
@@ -49,9 +44,7 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
             [self._source_body_id, self._target_body_id], dtype=np.int32
         )
         self._base_table_mass = self.model.body_mass[self._table_body_ids].copy()
-        self._base_table_inertia = self.model.body_inertia[
-            self._table_body_ids
-        ].copy()
+        self._base_table_inertia = self.model.body_inertia[self._table_body_ids].copy()
         self._table_geom_ids = np.flatnonzero(
             np.isin(self.model.geom_bodyid, self._table_body_ids)
             & (self.model.geom_contype != 0)
@@ -76,7 +69,7 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
         self._container_friction = 0.68
 
     def reset(self, seed: int | None = None) -> None:
-        super().reset()
+        super().reset(seed=seed)
         rng = np.random.default_rng(seed)
         self._randomize_physics(rng)
         self._place_scene(rng)
@@ -120,27 +113,19 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
 
         radius = self._container_radius
         height = self._container_height
-        transverse_inertia = self._container_mass * (
-            3 * radius**2 + height**2
-        ) / 12
+        transverse_inertia = self._container_mass * (3 * radius**2 + height**2) / 12
         axial_inertia = 0.5 * self._container_mass * radius**2
         self.model.body_mass[self._container_body_id] = self._container_mass
-        self.model.body_ipos[self._container_body_id] = (
-            self._container_center_of_mass
-        )
+        self.model.body_ipos[self._container_body_id] = self._container_center_of_mass
         self.model.body_inertia[self._container_body_id] = (
             transverse_inertia,
             transverse_inertia,
             axial_inertia,
         )
-        self.model.geom_friction[self._container_geom_ids, 0] = (
-            self._container_friction
-        )
+        self.model.geom_friction[self._container_geom_ids, 0] = self._container_friction
 
         table_scale = rng.uniform(0.95, 1.05)
-        self.model.body_mass[self._table_body_ids] = (
-            self._base_table_mass * table_scale
-        )
+        self.model.body_mass[self._table_body_ids] = self._base_table_mass * table_scale
         self.model.body_inertia[self._table_body_ids] = (
             self._base_table_inertia * table_scale
         )
@@ -188,9 +173,7 @@ class MujocoG1BucketCarryEnv(MujocoG1Env):
             self.TABLE_TOP_HEIGHT,
         )
         container_yaw = rng.uniform(-np.pi, np.pi)
-        self._set_freejoint(
-            self._container_qpos, container_position, container_yaw
-        )
+        self._set_freejoint(self._container_qpos, container_position, container_yaw)
 
         robot_position = np.array(
             [

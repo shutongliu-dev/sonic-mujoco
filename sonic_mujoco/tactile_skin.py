@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
 from typing import Literal
@@ -14,6 +14,18 @@ import mujoco
 import numpy as np
 
 from .tactile import TactileFrame, TaxelLayout
+from .tactile_calibration import (
+    FORCE_MAPPING_STATUS,
+    TactileCalibrationProfile,
+    TactileEpisodeRandomization,
+    TactileInputQuantity,
+    TactileProfileSampler,
+    asymmetric_first_order_filter,
+    make_legacy_tactile_profile,
+    power_law_response,
+    quantize_counts,
+    tactile_input,
+)
 
 TACTILE_DEVICE_NAMES = ("vest", "left_arm", "right_arm")
 TACTILE_DEVICE_DIM = 256
@@ -21,11 +33,23 @@ TACTILE_VALID_COUNT = 624
 _MAPPING_RADIUS_MIN_M = 0.03
 _MAPPING_RADIUS_MAX_M = 0.06
 _MAPPING_RADIUS_MARGIN_M = 0.01
+_MAX_SAMPLE_EVENTS_PER_UPDATE = 4096
 _SLEEVE_RAW_CHANNELS = np.asarray(
     tuple(range(128, TACTILE_DEVICE_DIM)) + tuple(range(128)),
     dtype=np.int32,
 ).reshape(16, 16)
 _SLEEVE_RAW_CHANNELS.setflags(write=False)
+# Preserve the legacy per-channel gain draw after moving the vest sidecar from
+# its historical shoulder-first order to the vendor's canonical arm-first order.
+_LEGACY_FIXED_GAIN_INDEX = np.r_[
+    np.arange(88),
+    np.arange(92, 100),
+    np.arange(88, 92),
+    np.arange(104, 112),
+    np.arange(100, 104),
+    np.arange(112, TACTILE_VALID_COUNT),
+]
+_LEGACY_FIXED_GAIN_INDEX.setflags(write=False)
 
 
 def _channels(*rows: tuple[int, ...]) -> tuple[int, ...]:
@@ -113,12 +137,14 @@ class JuQiaoSkinLayout:
     area_m2: np.ndarray
     mapping_radius_m: np.ndarray
     subregion: tuple[str, ...]
+    body_name: tuple[str, ...]
     left_mount: SleeveMount
     right_mount: SleeveMount
 
     @property
     def sha256(self) -> str:
-        payload = self.as_dict(include_taxels=True)
+        payload = self.as_dict(include_taxels=False)
+        payload["taxels"] = self._taxel_records(include_runtime_ids=False)
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
         return hashlib.sha256(canonical).hexdigest()
 
@@ -129,7 +155,8 @@ class JuQiaoSkinLayout:
 
     def as_dict(self, *, include_taxels: bool = True) -> dict[str, object]:
         result: dict[str, object] = {
-            "schema_version": 1,
+            "schema_version": 2,
+            "sha256_semantics": "scene_invariant_hardware_layout",
             "hardware": "JuQiao V1.0 triple-device tactile skin",
             "devices": list(TACTILE_DEVICE_NAMES),
             "device_shape": [TACTILE_DEVICE_DIM],
@@ -152,24 +179,28 @@ class JuQiaoSkinLayout:
             ),
         }
         if include_taxels:
-            result["taxels"] = [
-                {
-                    "index": index,
-                    "device": self.taxels.region_names[
-                        int(self.taxels.region_id[index])
-                    ],
-                    "channel": int(self.taxels.channel_id[index]),
-                    "subregion": self.subregion[index],
-                    "body_id": int(self.taxels.body_id[index]),
-                    "geom_id": int(self.taxels.geom_id[index]),
-                    "center_m": self.taxels.local_center[index].tolist(),
-                    "normal": self.taxels.local_normal[index].tolist(),
-                    "area_m2": float(self.area_m2[index]),
-                    "mapping_radius_m": float(self.mapping_radius_m[index]),
-                }
-                for index in range(len(self.taxels))
-            ]
+            result["taxels"] = self._taxel_records(include_runtime_ids=True)
         return result
+
+    def _taxel_records(self, *, include_runtime_ids: bool) -> list[dict[str, object]]:
+        records = []
+        for index in range(len(self.taxels)):
+            record: dict[str, object] = {
+                "index": index,
+                "device": self.taxels.region_names[int(self.taxels.region_id[index])],
+                "channel": int(self.taxels.channel_id[index]),
+                "subregion": self.subregion[index],
+                "body_name": self.body_name[index],
+                "center_m": self.taxels.local_center[index].tolist(),
+                "normal": self.taxels.local_normal[index].tolist(),
+                "area_m2": float(self.area_m2[index]),
+                "mapping_radius_m": float(self.mapping_radius_m[index]),
+            }
+            if include_runtime_ids:
+                record["body_id"] = int(self.taxels.body_id[index])
+                record["geom_id"] = int(self.taxels.geom_id[index])
+            records.append(record)
+        return records
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,70 +241,108 @@ class JuQiaoTactileAdapter:
         self,
         layout: JuQiaoSkinLayout,
         *,
-        sample_rate_hz: float = 14.0,
-        stale_timeout_s: float = 0.1,
+        sample_rate_hz: float | Sequence[float] = 14.0,
+        stale_timeout_s: float | Sequence[float] = 0.1,
         gain_counts_per_newton: float = 4.0,
         gamma: float = 1.0,
         force_offset_n: float = 0.0,
         gain_variation: float = 0.08,
         sample_rate_jitter: float = 0.08,
         seed: int = 0,
+        initial_time: float = 0.0,
+        input_quantity: TactileInputQuantity = "force",
+        dropout_probability: float | Sequence[float] = 0.0,
+        noise_std_counts: float | Sequence[float] = 0.0,
+        attack_tau_s: float = 0.0,
+        release_tau_s: float = 0.0,
+        output_deadband_counts: float = 0.0,
+        saturation_count: int = 255,
+        randomization: TactileEpisodeRandomization | None = None,
+        profile: TactileCalibrationProfile | None = None,
     ) -> None:
-        values = (
-            sample_rate_hz,
-            stale_timeout_s,
-            gain_counts_per_newton,
-            gamma,
-            force_offset_n,
-            gain_variation,
-            sample_rate_jitter,
-        )
-        if not all(np.isfinite(value) for value in values):
-            raise ValueError("tactile adapter parameters must be finite")
-        if sample_rate_hz <= 0.0:
-            raise ValueError("sample_rate_hz must be positive")
-        if stale_timeout_s <= 0.0:
-            raise ValueError("stale_timeout_s must be positive")
-        if gain_counts_per_newton <= 0.0 or gamma <= 0.0:
-            raise ValueError("tactile gain and gamma must be positive")
-        if force_offset_n < 0.0:
-            raise ValueError("force_offset_n must be nonnegative")
-        if not 0.0 <= gain_variation < 1.0:
-            raise ValueError("gain_variation must be in [0, 1)")
-        if not 0.0 <= sample_rate_jitter < 1.0:
-            raise ValueError("sample_rate_jitter must be in [0, 1)")
-
         self.layout = layout
-        self.sample_rate_hz = float(sample_rate_hz)
-        self.stale_timeout_s = float(stale_timeout_s)
-        self.gain_counts_per_newton = float(gain_counts_per_newton)
-        self.gamma = float(gamma)
-        self.force_offset_n = float(force_offset_n)
-        self.gain_variation = float(gain_variation)
-        self.sample_rate_jitter = float(sample_rate_jitter)
-        self.seed = int(seed)
-        rng = np.random.default_rng(seed)
-        self._device_sample_rate = self.sample_rate_hz * rng.uniform(
-            1.0 - sample_rate_jitter,
-            1.0 + sample_rate_jitter,
+        self._legacy_compatibility = profile is None
+        self.profile = profile or make_legacy_tactile_profile(
             len(TACTILE_DEVICE_NAMES),
+            device_names=TACTILE_DEVICE_NAMES,
+            layout_sha256=layout.sha256,
+            sample_rate_hz=sample_rate_hz,
+            stale_timeout_s=stale_timeout_s,
+            dropout_probability=dropout_probability,
+            noise_std_counts=noise_std_counts,
+            input_quantity=input_quantity,
+            gain=gain_counts_per_newton,
+            gamma=gamma,
+            offset=force_offset_n,
+            attack_tau_s=attack_tau_s,
+            release_tau_s=release_tau_s,
+            output_deadband_counts=output_deadband_counts,
+            saturation_count=saturation_count,
+            fixed_taxel_gain_variation=gain_variation,
+            fixed_device_rate_variation=sample_rate_jitter,
+            randomization=randomization,
         )
-        self._taxel_gain = rng.uniform(
-            1.0 - gain_variation,
-            1.0 + gain_variation,
+        device_names = tuple(device.name for device in self.profile.devices)
+        if device_names != TACTILE_DEVICE_NAMES:
+            raise ValueError(
+                "JuQiao profile device order must be vest, left_arm, right_arm"
+            )
+        if (
+            self.profile.layout_sha256 is not None
+            and self.profile.layout_sha256 != layout.sha256
+        ):
+            raise ValueError("tactile profile layout_sha256 does not match G1 skin")
+
+        transfer = self.profile.transfer
+        nominal_rates = np.asarray(
+            [device.sample_rate_hz for device in self.profile.devices]
+        )
+        stale_timeouts = np.asarray(
+            [device.stale_timeout_s for device in self.profile.devices]
+        )
+        self.sample_rate_hz = _uniform_or_list(nominal_rates)
+        self.stale_timeout_s = _uniform_or_list(stale_timeouts)
+        self.gain_counts_per_newton = (
+            float(transfer.gain) if transfer.input_quantity == "force" else None
+        )
+        self.gamma = float(transfer.gamma)
+        self.force_offset_n = (
+            float(transfer.offset) if transfer.input_quantity == "force" else None
+        )
+        self.gain_variation = float(self.profile.fixed_taxel_gain_variation)
+        self.sample_rate_jitter = float(self.profile.fixed_device_rate_variation)
+        self.seed = int(seed)
+        self._profile_sampler = TactileProfileSampler(
+            self.profile,
             len(layout.taxels),
+            seed=seed,
+            legacy_fixed_stream=self._legacy_compatibility,
+            fixed_taxel_permutation=(
+                _LEGACY_FIXED_GAIN_INDEX if self._legacy_compatibility else None
+            ),
         )
-        self._period = 1.0 / self._device_sample_rate
-        self._phase = np.arange(len(TACTILE_DEVICE_NAMES)) / (3.0 * self.sample_rate_hz)
+        self._phase = np.asarray(
+            [device.phase_offset_s for device in self.profile.devices],
+            dtype=np.float64,
+        )
+        self._stale_timeout = stale_timeouts
+        self._dropout_probability = np.asarray(
+            [device.dropout_probability for device in self.profile.devices],
+            dtype=np.float64,
+        )
         self._held = np.zeros(
             (len(TACTILE_DEVICE_NAMES), TACTILE_DEVICE_DIM), dtype=np.uint8
         )
         self._source_time = np.full(len(TACTILE_DEVICE_NAMES), -1.0)
-        self._next_sample = self._phase.copy()
-        self.last_frame = self._frame(np.zeros(3, dtype=bool))
+        self._next_sample = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=np.float64)
+        self._response = np.zeros(len(layout.taxels), dtype=np.float64)
+        self._last_update_time = float(initial_time)
+        self._activate_episode(initial_time, seed)
 
     @property
     def metadata(self) -> dict[str, object]:
+        transfer = self.profile.transfer
+        randomization = self.profile.randomization
         return {
             "schema_version": 1,
             "mode": "triple",
@@ -286,6 +355,7 @@ class JuQiaoTactileAdapter:
             "fixed_device_rate_variation": self.sample_rate_jitter,
             "sampling": "independent_phase_sample_and_hold",
             "stale_timeout_s": self.stale_timeout_s,
+            "dropout_probability": self._dropout_probability.tolist(),
             "normal_force_only": True,
             "mapping_radius_m": {
                 "minimum": float(np.min(self.layout.mapping_radius_m)),
@@ -300,25 +370,63 @@ class JuQiaoTactileAdapter:
             "force_offset_n": self.force_offset_n,
             "taxel_gain_variation": self.gain_variation,
             "random_seed": self.seed,
+            "episode_seed": self._episode.seed,
+            "episode_profile": self._episode.as_dict(),
             "taxel_gain_sha256": hashlib.sha256(
                 self._taxel_gain.astype("<f8", copy=False).tobytes()
             ).hexdigest(),
-            "calibration_status": "provisional_until_force_fixture_calibration",
+            "calibration_status": (
+                "provisional_until_force_fixture_calibration"
+                if self._legacy_compatibility
+                else FORCE_MAPPING_STATUS
+            ),
+            "paired_force_calibrated": False,
+            "force_mapping_warning": (
+                "N/kPa to count mapping has no synchronized paired-force fixture "
+                "calibration; task-data marginals are not a force calibration"
+            ),
+            "input_quantity": transfer.input_quantity,
+            "input_unit": transfer.input_unit,
+            "gain_counts_per_input_unit_power": transfer.gain,
+            "input_offset": transfer.offset,
+            "profile_id": self.profile.profile_id,
+            "profile_sha256": self.profile.sha256,
+            "profile_file_sha256": self.profile.source_file_sha256,
+            "profile": self.profile.as_dict(),
+            "physical_preload_input": {
+                "unit": transfer.input_unit,
+                "episode_range": randomization.preload.as_dict(),
+                "identifiability": ("not_identifiable_from_post_baseline_quiet_frames"),
+            },
+            "post_baseline_residual_count": {
+                "unit": "count",
+                "episode_range": randomization.residual_bias_counts.as_dict(),
+                "identifiability": "estimable_from_post_baseline_quiet_frames",
+            },
             "layout_sha256": self.layout.sha256,
             "source_time": {
                 "unit": "s",
                 "clock": "mujoco_sim_time",
                 "invalid_sentinel": -1.0,
             },
-            "updated_semantics": "device_sampled_on_this_record_row",
+            "updated_semantics": "non_dropped_device_packet_published_on_this_record_row",
         }
 
-    def reset(self, time: float = 0.0) -> None:
+    def reset(self, time: float = 0.0, *, seed: int | None = None) -> None:
+        self._activate_episode(time, seed)
+
+    def _activate_episode(self, time: float, seed: int | None) -> None:
         if not np.isfinite(time):
             raise ValueError("reset time must be finite")
+        self._episode, self._rng = self._profile_sampler.sample(seed=seed)
+        self._device_sample_rate = self._episode.device_sample_rate_hz
+        self._taxel_gain = self._episode.taxel_gain_scale
+        self._period = 1.0 / self._device_sample_rate
         self._held.fill(0)
         self._source_time.fill(-1.0)
         self._next_sample = float(time) + self._phase
+        self._response.fill(0.0)
+        self._last_update_time = float(time)
         self.last_frame = self._frame(np.zeros(3, dtype=bool))
 
     def update(self, frame: TactileFrame, time: float) -> JuQiaoTactileFrame:
@@ -326,34 +434,91 @@ class JuQiaoTactileAdapter:
             raise ValueError("tactile frame uses a different taxel layout")
         if not np.isfinite(time):
             raise ValueError("sample time must be finite")
-        raw = self._quantize(frame.normal_force)
+        if time < self._last_update_time:
+            raise ValueError("tactile sample time must be nondecreasing")
+        transfer = self.profile.transfer
+        physical_input = tactile_input(
+            frame.normal_force,
+            self.layout.area_m2,
+            transfer.input_quantity,
+        )
+        target = power_law_response(physical_input, transfer, self._episode)
         updated = np.zeros(len(TACTILE_DEVICE_NAMES), dtype=bool)
         region_ids = self.layout.taxels.region_id
         channels = self.layout.taxels.channel_id
+        events: list[tuple[float, int]] = []
         for device_id in range(len(TACTILE_DEVICE_NAMES)):
             if time + 1e-12 >= self._next_sample[device_id]:
-                packet = np.zeros(TACTILE_DEVICE_DIM, dtype=np.uint8)
-                mask = region_ids == device_id
-                packet[channels[mask]] = raw[mask]
-                self._held[device_id] = packet
-                self._source_time[device_id] = time
-                updated[device_id] = True
                 elapsed = time - self._next_sample[device_id]
                 period = self._period[device_id]
                 periods = math.floor(max(elapsed, 0.0) / period) + 1
+                if len(events) + periods > _MAX_SAMPLE_EVENTS_PER_UPDATE:
+                    raise RuntimeError(
+                        "too many tactile samples elapsed; reset the adapter after "
+                        "a simulation-time discontinuity"
+                    )
+                events.extend(
+                    (
+                        min(
+                            self._next_sample[device_id] + index * period,
+                            float(time),
+                        ),
+                        device_id,
+                    )
+                    for index in range(periods)
+                )
                 self._next_sample[device_id] += periods * period
-            if time - self._source_time[device_id] > self.stale_timeout_s:
+
+        response_time = self._last_update_time
+        for sample_time, device_id in sorted(events):
+            self._advance_response(target, sample_time - response_time)
+            response_time = sample_time
+            if self._rng.random() < self._dropout_probability[device_id]:
+                continue
+            self._held[device_id] = self._sample_device(
+                device_id,
+                region_ids,
+                channels,
+            )
+            self._source_time[device_id] = (
+                time if self._legacy_compatibility else sample_time
+            )
+            updated[device_id] = True
+
+        self._advance_response(target, time - response_time)
+        self._last_update_time = float(time)
+        for device_id in range(len(TACTILE_DEVICE_NAMES)):
+            if time - self._source_time[device_id] > self._stale_timeout[device_id]:
                 self._held[device_id].fill(0)
         self.last_frame = self._frame(updated)
         return self.last_frame
 
-    def _quantize(self, normal_force: np.ndarray) -> np.ndarray:
-        force = np.asarray(normal_force, dtype=np.float64)
-        if force.shape != (len(self.layout.taxels),):
-            raise ValueError("normal_force does not match JuQiao layout")
-        response = np.maximum(force - self.force_offset_n, 0.0) ** self.gamma
-        response *= self.gain_counts_per_newton * self._taxel_gain
-        return np.clip(np.rint(response), 0, 255).astype(np.uint8)
+    def _advance_response(self, target: np.ndarray, duration: float) -> None:
+        transfer = self.profile.transfer
+        self._response = asymmetric_first_order_filter(
+            self._response,
+            target,
+            float(duration),
+            attack_tau_s=transfer.attack_tau_s,
+            release_tau_s=transfer.release_tau_s,
+        )
+
+    def _sample_device(
+        self,
+        device_id: int,
+        region_ids: np.ndarray,
+        channels: np.ndarray,
+    ) -> np.ndarray:
+        packet = np.zeros(TACTILE_DEVICE_DIM, dtype=np.uint8)
+        mask = region_ids == device_id
+        response = self._response[mask] + self._episode.taxel_residual_bias_counts[mask]
+        packet[channels[mask]] = quantize_counts(
+            response,
+            noise_std_counts=float(self._episode.device_noise_std_counts[device_id]),
+            transfer=self.profile.transfer,
+            rng=self._rng,
+        )
+        return packet
 
     def _frame(self, updated: np.ndarray) -> JuQiaoTactileFrame:
         return JuQiaoTactileFrame(
@@ -417,29 +582,25 @@ def _vest_torso_taxels() -> Iterator[_SkinTaxel]:
 
 
 def _vest_arm_taxels() -> Iterator[_SkinTaxel]:
-    vest_regions = {entry[0]: entry for entry in _VEST_REGIONS[2:]}
-    for side in ("left", "right"):
-        for band, suffix in enumerate(("shoulder", "arm")):
-            key = f"{side}_{suffix}"
-            _, rows, columns, one_based_channels = vest_regions[key]
-            for row, column in np.ndindex(rows, columns):
-                angle = math.radians(-70.0 + column * (140.0 / 3.0))
-                z = 0.025 - band * 0.046 - row * 0.020
-                radius = 0.051
-                center = np.array(
-                    (radius * math.cos(angle), radius * math.sin(angle), z)
-                )
-                normal = np.array((math.cos(angle), math.sin(angle), 0.0))
-                channel = one_based_channels[row * columns + column] - 1
-                yield _SkinTaxel(
-                    body_name=f"{side}_shoulder_yaw_link",
-                    device_id=0,
-                    channel=channel,
-                    center=center,
-                    normal=normal,
-                    area_m2=0.025 * 0.018,
-                    subregion=key,
-                )
+    for key, rows, columns, one_based_channels in _VEST_REGIONS[2:]:
+        side, region = key.split("_", maxsplit=1)
+        band = 0 if region == "shoulder" else 1
+        for row, column in np.ndindex(rows, columns):
+            angle = math.radians(-70.0 + column * (140.0 / 3.0))
+            z = 0.025 - band * 0.046 - row * 0.020
+            radius = 0.051
+            center = np.array((radius * math.cos(angle), radius * math.sin(angle), z))
+            normal = np.array((math.cos(angle), math.sin(angle), 0.0))
+            channel = one_based_channels[row * columns + column] - 1
+            yield _SkinTaxel(
+                body_name=f"{side}_shoulder_yaw_link",
+                device_id=0,
+                channel=channel,
+                center=center,
+                normal=normal,
+                area_m2=0.025 * 0.018,
+                subregion=key,
+            )
 
 
 def _sleeve_taxels(
@@ -499,6 +660,7 @@ def _compile_skin_layout(
     channel_ids: list[int] = []
     areas: list[float] = []
     subregions: list[str] = []
+    body_names: list[str] = []
     mounts: dict[str, tuple[int, int]] = {}
 
     for taxel in taxels:
@@ -518,6 +680,7 @@ def _compile_skin_layout(
         channel_ids.append(taxel.channel)
         areas.append(taxel.area_m2)
         subregions.append(taxel.subregion)
+        body_names.append(taxel.body_name)
 
     layout = TaxelLayout(
         body_id=_readonly(np.asarray(body_ids, dtype=np.int32)),
@@ -536,6 +699,7 @@ def _compile_skin_layout(
         area_m2=area_m2,
         mapping_radius_m=mapping_radius_m,
         subregion=tuple(subregions),
+        body_name=tuple(body_names),
         left_mount=left_mount,
         right_mount=right_mount,
     )
@@ -696,6 +860,13 @@ def _validate_layout(
 def _readonly(array: np.ndarray) -> np.ndarray:
     array.setflags(write=False)
     return array
+
+
+def _uniform_or_list(values: np.ndarray) -> float | list[float]:
+    values = np.asarray(values, dtype=np.float64)
+    if np.all(values == values[0]):
+        return float(values[0])
+    return values.tolist()
 
 
 def _same_layout(left: TaxelLayout, right: TaxelLayout) -> bool:

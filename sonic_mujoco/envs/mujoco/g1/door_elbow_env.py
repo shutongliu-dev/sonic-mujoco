@@ -23,14 +23,7 @@ class MujocoG1DoorElbowEnv(MujocoG1Env):
 
     def __init__(self, timestep: float = 0.005) -> None:
         package_root = Path(__file__).resolve().parents[3]
-        scene = (
-            package_root
-            / "assets"
-            / "mujoco"
-            / "scenes"
-            / "g1"
-            / "door_elbow.xml"
-        )
+        scene = package_root / "assets" / "mujoco" / "scenes" / "g1" / "door_elbow.xml"
         super().__init__(scene, timestep)
 
         self._robot_qpos = self._freejoint_qpos_address("floating_base_joint")
@@ -48,7 +41,7 @@ class MujocoG1DoorElbowEnv(MujocoG1Env):
         self._execution_side = 1
 
     def reset(self, seed: int | None = None) -> None:
-        super().reset()
+        super().reset(seed=seed)
         rng = np.random.default_rng(seed)
         self._randomize_door(rng)
         self._place_robot(rng)
@@ -84,9 +77,7 @@ class MujocoG1DoorElbowEnv(MujocoG1Env):
 
     def _place_robot(self, rng: np.random.Generator) -> None:
         self._execution_side = int(rng.choice((-1, 1)))
-        yaw = self._execution_side * rng.uniform(
-            np.deg2rad(8.0), np.deg2rad(20.0)
-        )
+        yaw = self._execution_side * rng.uniform(np.deg2rad(8.0), np.deg2rad(20.0))
         self.data.qpos[self._robot_qpos : self._robot_qpos + 3] = (
             rng.uniform(0.48, 0.70),
             self._execution_side * rng.uniform(0.12, 0.24),

@@ -7,6 +7,7 @@ import numpy as np
 from ....contact import ContactRecorder
 from ....neck import NECK_DOF, NECK_JOINT_NAMES
 from ....tactile import TactileRecorder
+from ....tactile_calibration import TactileCalibrationProfile
 from ....tactile_skin import (
     JuQiaoTactileAdapter,
     build_juqiao_skin_layout,
@@ -98,6 +99,22 @@ class MujocoG1Env(MujocoEnvBase):
         if root_id < 0 or self.model.jnt_type[root_id] != mujoco.mjtJoint.mjJNT_FREE:
             raise ValueError("G1 model must have a floating_base_joint")
 
+    def configure_tactile_profile(
+        self,
+        profile: TactileCalibrationProfile,
+        *,
+        seed: int = 0,
+    ) -> None:
+        """Replace the packet adapter and align it to the current simulation clock."""
+
+        self.tactile_adapter = JuQiaoTactileAdapter(
+            self.tactile_skin_layout,
+            profile=profile,
+            seed=seed,
+            initial_time=self.time,
+        )
+        self.tactile_suit = self.tactile_adapter.last_frame
+
     def get_robot_state(self) -> RobotState:
         return RobotState(
             timestamp=self.time,
@@ -160,11 +177,11 @@ class MujocoG1Env(MujocoEnvBase):
         tactile = self.tactile.finish()
         self.tactile_suit = self.tactile_adapter.update(tactile, self.time)
 
-    def reset(self) -> None:
+    def reset(self, seed: int | None = None) -> None:
         super().reset()
         self.contacts.reset()
         self.tactile.reset()
-        self.tactile_adapter.reset(self.time)
+        self.tactile_adapter.reset(self.time, seed=seed)
         self.tactile_suit = self.tactile_adapter.last_frame
 
     def _joint_id(self, name: str) -> int:

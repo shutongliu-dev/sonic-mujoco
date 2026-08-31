@@ -74,7 +74,7 @@ class MujocoG1BasketLoadingEnv(MujocoG1Env):
         self._loading_started = False
 
     def reset(self, seed: int | None = None) -> None:
-        super().reset()
+        super().reset(seed=seed)
         rng = np.random.default_rng(seed)
         self._randomize_physics(rng)
         self._place_scene(rng)
