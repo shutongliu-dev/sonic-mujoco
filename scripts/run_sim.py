@@ -13,10 +13,12 @@ from sonic_mujoco.envs.mujoco.g1 import (
     MujocoG1SweepEnv,
     RobotCommand,
 )
+from sonic_mujoco.envs.mujoco.h2 import MujocoH2EmptyEnv
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run the minimal G1 MuJoCo scene")
+    parser = argparse.ArgumentParser(description="Run a supported MuJoCo robot")
+    parser.add_argument("--robot", choices=("g1", "h2"), default="g1")
     parser.add_argument(
         "--scene",
         choices=(
@@ -30,14 +32,18 @@ def parse_args() -> argparse.Namespace:
         ),
         default="empty",
     )
-    parser.add_argument("--headless", action="store_true", help="do not open the viewer")
-    parser.add_argument("--steps", type=int, default=0, help="stop after this many steps")
+    parser.add_argument(
+        "--headless", action="store_true", help="do not open the viewer"
+    )
+    parser.add_argument(
+        "--steps", type=int, default=0, help="stop after this many steps"
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    environments = {
+    g1_environments = {
         "empty": MujocoG1EmptyEnv,
         "sweep": MujocoG1SweepEnv,
         "chair_lean": MujocoG1ChairLeanEnv,
@@ -46,23 +52,32 @@ def main() -> None:
         "bucket_carry": MujocoG1BucketCarryEnv,
         "plush_carry": MujocoG1PlushCarryEnv,
     }
-    env = environments[args.scene]()
+    if args.robot == "h2":
+        if args.scene != "empty":
+            raise SystemExit("H2 currently supports --scene empty only")
+        env = MujocoH2EmptyEnv()
+    else:
+        env = g1_environments[args.scene]()
     env.reset()
     state = env.get_robot_state()
-    command = RobotCommand(
-        joint_position=state.joint_position,
-        joint_velocity=np.zeros(29),
-        feedforward_torque=np.zeros(29),
-        kp=np.full(29, 20.0),
-        kd=np.full(29, 1.0),
-    )
+    if args.robot == "h2":
+        command = env.home_command()
+    else:
+        zeros = np.zeros_like(state.joint_position)
+        command = RobotCommand(
+            joint_position=state.joint_position,
+            joint_velocity=zeros,
+            feedforward_torque=zeros,
+            kp=np.full_like(state.joint_position, 20.0),
+            kd=np.full_like(state.joint_position, 1.0),
+        )
 
     print(command)
 
     try:
         if args.headless:
             env.step(command, args.steps or 1)
-            print(f"G1 simulation OK: time={env.time:.3f}s")
+            print(f"{args.robot.upper()} simulation OK: time={env.time:.3f}s")
             return
 
         env.render()

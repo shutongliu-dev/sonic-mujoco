@@ -5,6 +5,7 @@ from .door_elbow_env import DoorElbowState, MujocoG1DoorElbowEnv
 from .empty_env import MujocoG1EmptyEnv
 from .g1_env import (
     DEXHAND_JOINT_NAMES,
+    G1_ROBOT_SPEC,
     NECK_JOINT_NAMES,
     SONIC_JOINT_NAMES,
     MujocoG1Env,
@@ -16,6 +17,7 @@ from .sweep_env import MujocoG1SweepEnv, SweepState
 
 __all__ = [
     "DEXHAND_JOINT_NAMES",
+    "G1_ROBOT_SPEC",
     "NECK_JOINT_NAMES",
     "SONIC_JOINT_NAMES",
     "BasketLoadingState",

@@ -1,10 +1,8 @@
-from dataclasses import dataclass
 from pathlib import Path
 
 import mujoco
 import numpy as np
 
-from ....contact import ContactRecorder
 from ....neck import NECK_DOF, NECK_JOINT_NAMES
 from ....tactile import TactileRecorder
 from ....tactile_calibration import TactileCalibrationProfile
@@ -13,8 +11,9 @@ from ....tactile_skin import (
     build_juqiao_skin_layout,
 )
 from ....teleop.dexhand import DEXHAND_JOINT_NAMES
-from ..env_base import MujocoEnvBase
-from .interface import RobotCommand, RobotState
+from ..robot import JointGroup, RobotSpec
+from ..robot_env import MujocoRobotEnv
+from .interface import RobotCommand
 
 SONIC_JOINT_NAMES = (
     "left_hip_pitch_joint",
@@ -49,18 +48,27 @@ SONIC_JOINT_NAMES = (
 )
 
 
-@dataclass(frozen=True, slots=True)
-class _JointGroup:
-    joint_ids: tuple[int, ...]
-    actuator_ids: tuple[int, ...]
-    actuator_indices: np.ndarray
-    qpos_indices: np.ndarray
-    dof_indices: np.ndarray
-    joint_range: np.ndarray
-    control_range: np.ndarray
+G1_ROBOT_SPEC = RobotSpec(
+    robot_id="unitree_g1_29dof_dexhand",
+    joint_names=SONIC_JOINT_NAMES,
+    root_joint_name="floating_base_joint",
+    root_body_name="pelvis",
+    imu_quaternion_sensor="imu_quat",
+    imu_angular_velocity_sensor="imu_gyro",
+    imu_linear_acceleration_sensor="imu_acc",
+    camera_names=(
+        "head_camera",
+        "head_camera_scan",
+        "head_camera_left",
+        "head_camera_right",
+    ),
+    capabilities=frozenset(
+        {"dexhand", "auxiliary_neck", "ego_rgb", "stereo_rgb", "juqiao_tactile"}
+    ),
+)
 
 
-class MujocoG1Env(MujocoEnvBase):
+class MujocoG1Env(MujocoRobotEnv):
     """MuJoCo environment using the G1 hardware joint order."""
 
     hand_kp = 2.5
@@ -75,15 +83,14 @@ class MujocoG1Env(MujocoEnvBase):
         *,
         model: mujoco.MjModel | None = None,
     ) -> None:
-        super().__init__(xml_path, timestep, model=model)
-        self._body_joints = self._joint_group(SONIC_JOINT_NAMES)
-        self._hand_joints = self._joint_group(DEXHAND_JOINT_NAMES)
-        self._neck_joints = self._joint_group(NECK_JOINT_NAMES)
-        self._publish_joint_group_aliases()
-        self._imu_quaternion = self._sensor_slice("imu_quat")
-        self._imu_angular_velocity = self._sensor_slice("imu_gyro")
-        self._imu_linear_acceleration = self._sensor_slice("imu_acc")
-        self.contacts = ContactRecorder(self.model)
+        super().__init__(xml_path, G1_ROBOT_SPEC, timestep, model=model)
+        self._hand_joints = JointGroup.from_model(
+            self.model, DEXHAND_JOINT_NAMES, robot_id=G1_ROBOT_SPEC.robot_id
+        )
+        self._neck_joints = JointGroup.from_model(
+            self.model, NECK_JOINT_NAMES, robot_id=G1_ROBOT_SPEC.robot_id
+        )
+        self._publish_auxiliary_joint_aliases()
         self.tactile_skin_layout = build_juqiao_skin_layout(self.model)
         self.tactile = TactileRecorder(
             self.model,
@@ -92,12 +99,6 @@ class MujocoG1Env(MujocoEnvBase):
         )
         self.tactile_adapter = JuQiaoTactileAdapter(self.tactile_skin_layout)
         self.tactile_suit = self.tactile_adapter.last_frame
-
-        root_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_JOINT, "floating_base_joint"
-        )
-        if root_id < 0 or self.model.jnt_type[root_id] != mujoco.mjtJoint.mjJNT_FREE:
-            raise ValueError("G1 model must have a floating_base_joint")
 
     def configure_tactile_profile(
         self,
@@ -115,149 +116,58 @@ class MujocoG1Env(MujocoEnvBase):
         )
         self.tactile_suit = self.tactile_adapter.last_frame
 
-    def get_robot_state(self) -> RobotState:
-        return RobotState(
-            timestamp=self.time,
-            base_position=self.data.qpos[:3].copy(),
-            base_quaternion=self.data.qpos[3:7].copy(),
-            base_linear_velocity=self.data.qvel[:3].copy(),
-            base_angular_velocity=self.data.qvel[3:6].copy(),
-            joint_position=self.data.qpos[self._qpos_indices].copy(),
-            joint_velocity=self.data.qvel[self._dof_indices].copy(),
-            joint_effort=self.data.actuator_force[self._actuator_indices].copy(),
-            imu_quaternion=self.data.sensordata[self._imu_quaternion].copy(),
-            imu_angular_velocity=self.data.sensordata[
-                self._imu_angular_velocity
-            ].copy(),
-            imu_linear_acceleration=self.data.sensordata[
-                self._imu_linear_acceleration
-            ].copy(),
+    def _begin_control_interval(self) -> None:
+        self.tactile.begin()
+        self._causal_tactile = self.tactile_adapter.profile.schema_version >= 2
+        self._tactile_updated = np.zeros_like(self.tactile_suit.updated)
+
+    def _apply_command(self, command: RobotCommand) -> None:
+        super()._apply_command(command)
+        if command.hand_joint_position is not None:
+            self._hand_joints.apply_position_pd(
+                self.data,
+                command.hand_joint_position,
+                kp=self.hand_kp,
+                kd=self.hand_kd,
+            )
+        neck_target = (
+            np.zeros(NECK_DOF, dtype=np.float64)
+            if command.neck_joint_position is None
+            else command.neck_joint_position
+        )
+        self._neck_joints.apply_position_pd(
+            self.data,
+            neck_target,
+            kp=self.neck_kp,
+            kd=self.neck_kd,
         )
 
-    def step(self, command: RobotCommand, steps: int = 1) -> None:
-        if steps < 1:
-            raise ValueError("steps must be positive")
+    def _after_physics_step(self) -> None:
+        normal_force = self.tactile.update(self.data)
+        if self._causal_tactile:
+            tactile_sample = self.tactile_adapter.update_normal_force(
+                normal_force,
+                self.time,
+            )
+            self._tactile_updated |= tactile_sample.updated
 
-        self.contacts.begin()
-        self.tactile.begin()
-        causal_tactile = self.tactile_adapter.profile.schema_version >= 2
-        tactile_updated = np.zeros_like(self.tactile_suit.updated)
-        for _ in range(steps):
-            state = self.get_robot_state()
-            torque = (
-                command.feedforward_torque
-                + command.kp * (command.joint_position - state.joint_position)
-                + command.kd * (command.joint_velocity - state.joint_velocity)
-            )
-            torque = np.clip(
-                torque, self._control_range[:, 0], self._control_range[:, 1]
-            )
-            self.data.ctrl[:] = 0.0
-            self.data.ctrl[self._actuator_indices] = torque
-            if command.hand_joint_position is not None:
-                self._apply_position_pd(
-                    self._hand_joints,
-                    command.hand_joint_position,
-                    kp=self.hand_kp,
-                    kd=self.hand_kd,
-                )
-            neck_target = (
-                np.zeros(NECK_DOF, dtype=np.float64)
-                if command.neck_joint_position is None
-                else command.neck_joint_position
-            )
-            self._apply_position_pd(
-                self._neck_joints,
-                neck_target,
-                kp=self.neck_kp,
-                kd=self.neck_kd,
-            )
-            mujoco.mj_step(self.model, self.data)
-            self.contacts.update(self.data)
-            normal_force = self.tactile.update(self.data)
-            if causal_tactile:
-                tactile_sample = self.tactile_adapter.update_normal_force(
-                    normal_force,
-                    self.time,
-                )
-                tactile_updated |= tactile_sample.updated
-        self.contacts.finish()
+    def _finish_control_interval(self) -> None:
         tactile = self.tactile.finish()
-        if causal_tactile:
-            self.tactile_suit = self.tactile_adapter.snapshot(updated=tactile_updated)
+        if self._causal_tactile:
+            self.tactile_suit = self.tactile_adapter.snapshot(
+                updated=self._tactile_updated
+            )
         else:
             self.tactile_suit = self.tactile_adapter.update(tactile, self.time)
 
     def reset(self, seed: int | None = None) -> None:
-        super().reset()
-        self.contacts.reset()
+        super().reset(seed)
         self.tactile.reset()
         self.tactile_adapter.reset(self.time, seed=seed)
         self.tactile_suit = self.tactile_adapter.last_frame
 
-    def _joint_id(self, name: str) -> int:
-        joint_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_JOINT, name)
-        if joint_id < 0:
-            raise ValueError(f"missing G1 joint: {name}")
-        return joint_id
-
-    def _actuator_id(self, joint_name: str, joint_id: int) -> int:
-        actuator_name = joint_name.removesuffix("_joint")
-        actuator_id = mujoco.mj_name2id(
-            self.model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator_name
-        )
-        if actuator_id < 0:
-            raise ValueError(f"missing G1 actuator: {actuator_name}")
-        if self.model.actuator_trnid[actuator_id, 0] != joint_id:
-            raise ValueError(f"actuator {actuator_name} does not drive {joint_name}")
-        return actuator_id
-
-    def _joint_group(self, names: tuple[str, ...]) -> _JointGroup:
-        joint_ids = tuple(self._joint_id(name) for name in names)
-        actuator_ids = tuple(
-            self._actuator_id(name, joint_id)
-            for name, joint_id in zip(names, joint_ids, strict=True)
-        )
-        joint_indices = np.asarray(joint_ids)
-        actuator_indices = np.asarray(actuator_ids)
-        return _JointGroup(
-            joint_ids=joint_ids,
-            actuator_ids=actuator_ids,
-            actuator_indices=actuator_indices,
-            qpos_indices=self.model.jnt_qposadr[joint_indices],
-            dof_indices=self.model.jnt_dofadr[joint_indices],
-            joint_range=self.model.jnt_range[joint_indices].copy(),
-            control_range=self.model.actuator_ctrlrange[actuator_indices].copy(),
-        )
-
-    def _apply_position_pd(
-        self,
-        group: _JointGroup,
-        target: np.ndarray,
-        *,
-        kp: float,
-        kd: float,
-    ) -> None:
-        target = np.clip(target, group.joint_range[:, 0], group.joint_range[:, 1])
-        torque = (
-            kp * (target - self.data.qpos[group.qpos_indices])
-            - kd * self.data.qvel[group.dof_indices]
-        )
-        self.data.ctrl[group.actuator_indices] = np.clip(
-            torque,
-            group.control_range[:, 0],
-            group.control_range[:, 1],
-        )
-
-    def _publish_joint_group_aliases(self) -> None:
+    def _publish_auxiliary_joint_aliases(self) -> None:
         """Keep the original public arrays while joint groups own their setup."""
-
-        self.joint_ids = self._body_joints.joint_ids
-        self.actuator_ids = self._body_joints.actuator_ids
-        self._actuator_indices = self._body_joints.actuator_indices
-        self._qpos_indices = self._body_joints.qpos_indices
-        self._dof_indices = self._body_joints.dof_indices
-        self._control_range = self._body_joints.control_range
 
         self.hand_joint_ids = self._hand_joints.joint_ids
         self.hand_actuator_ids = self._hand_joints.actuator_ids
@@ -274,10 +184,3 @@ class MujocoG1Env(MujocoEnvBase):
         self._neck_dof_indices = self._neck_joints.dof_indices
         self._neck_joint_range = self._neck_joints.joint_range
         self._neck_control_range = self._neck_joints.control_range
-
-    def _sensor_slice(self, name: str) -> slice:
-        sensor_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_SENSOR, name)
-        if sensor_id < 0:
-            raise ValueError(f"missing G1 sensor: {name}")
-        start = self.model.sensor_adr[sensor_id]
-        return slice(start, start + self.model.sensor_dim[sensor_id])

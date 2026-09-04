@@ -1,8 +1,9 @@
 # sonic_mujoco
 
-`sonic_mujoco` 是面向 Unitree G1 的轻量 MuJoCo 全身遥操作与数据采集工程。
-它在一个进程内完成 PICO 全身姿态接收、SONIC 推理、G1 仿真控制、第一视角
-回传、接触触觉反馈和 LeRobot 风格 episode 录制。
+`sonic_mujoco` 是面向 Unitree G1 的轻量 MuJoCo 全身遥操作与数据采集工程，
+同时提供基于 Unitree 官方资产的 H2 仿真基础。G1 链路在一个进程内完成 PICO 全身
+姿态接收、SONIC 推理、仿真控制、第一视角回传、接触触觉反馈和 LeRobot 风格
+episode 录制。
 
 项目当前提供空场景、Sweep 扫桌、Chair lean 椅背倚靠，以及刚性与柔性物体
 搬运任务。实现强调清晰的数据流和较少的运行时组件，适合仿真遥操作、示教
@@ -12,6 +13,8 @@
 
 - MuJoCo 中的 29-DoF G1、双侧 40-DoF 五指灵巧手、PD 控制与 SONIC
   encoder/decoder 推理；
+- 官方 31-DoF Unitree H2 模型、固定版本的 actuator 顺序、原生两轴头部、
+  头部双目与双腕相机，以及独立的状态和 PD 控制接口；
 - PICO 24 关节全身追踪和 50 Hz 真人到 G1 动作映射；
 - PICO 26 点手部追踪到五指灵巧手的实时 retargeting；
 - PICO 头部姿态到两轴仿真颈部和第一视角相机的实时跟随；
@@ -71,6 +74,34 @@ sudo apt install python3-gi gir1.2-gstreamer-1.0 \
 ```bash
 .venv/bin/python scripts/run_sim.py --headless --steps 100
 ```
+
+H2 自检使用：
+
+```bash
+.venv/bin/python scripts/run_sim.py --robot h2 --headless --steps 100
+```
+
+## H2 基础支持
+
+H2 入口使用 Unitree 官方 MuJoCo 模型的 31 个电机，并严格按照仓库固定版本
+MJCF 的 actuator 顺序返回关节位置、速度和力矩。最后两个主关节就是 H2 原生的
+`head_pitch` 与 `head_yaw`，不同于 G1 上额外安装的两轴仿真颈部。模型还定义了
+头部单目、64 mm 双目和左右腕部相机。打开交互 viewer：
+
+```bash
+.venv/bin/python scripts/run_sim.py --robot h2
+```
+
+当前 H2 是可加载、可观测、可按固定 31 维顺序控制的仿真基础，只开放空场景。
+Unitree 不同版本的真机示例曾使用不同的腰、腕和踝关节槽位顺序；连接真机前
+必须绑定固件版本并做只读关节回读校验，不能只凭向量长度直接下发。
+仓库尚未包含与这份 H2 plant 匹配的 SONIC 或 TWIST2 权重，因此不会把 G1 权重
+补零后伪装成 H2 policy；H2 也不会冒用 G1 的 DexHand 和矩侨皮肤字段。新增的
+相机安装位姿是明确记录的仿真约定，不是真机外参标定。当前入口只是姿态保持
+自检；其 PD 控制器没有主动平衡能力，长时间站立与行走需要匹配 H2 的全身
+运动策略。
+当前固定的官方 H2 MJCF 到左右腕部为止，没有独立可控的手掌或手指关节；
+H2 Plus 的双手属于另一套 embodiment，后续必须用单独的模型与关节映射接入。
 
 ## GR00T Sweep 仿真评测
 

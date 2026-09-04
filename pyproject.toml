@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sonic-mujoco"
 version = "0.1.0"
-description = "Minimal MuJoCo environment for the SONIC-compatible Unitree G1"
+description = "MuJoCo environments for Unitree G1 and H2 humanoids"
 requires-python = ">=3.10"
 dependencies = ["mujoco>=3.3,<4", "scipy>=1.10,<2"]
 
@@ -29,8 +29,13 @@ sonic_mujoco = [
   "assets/mujoco/robots/g1/*.xml",
   "assets/mujoco/robots/g1/*.md",
   "assets/mujoco/robots/g1/meshes/*.STL",
+  "assets/mujoco/robots/h2/*.xml",
+  "assets/mujoco/robots/h2/*.md",
+  "assets/mujoco/robots/h2/LICENSE",
+  "assets/mujoco/robots/h2/meshes/*.stl",
   "assets/mujoco/meshes/*.obj",
   "assets/mujoco/scenes/g1/*.xml",
+  "assets/mujoco/scenes/h2/*.xml",
   "assets/mujoco/textures/*.md",
   "assets/mujoco/textures/*.png",
   "assets/pico/*.md",

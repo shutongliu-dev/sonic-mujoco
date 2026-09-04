@@ -4,19 +4,17 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ....neck import NECK_DOF
+from ..robot import RobotState, finite_vector
 
 Array = NDArray[np.float64]
 G1_DOF = 29
 DEXHAND_DOF = 40
 
+__all__ = ["DEXHAND_DOF", "G1_DOF", "RobotCommand", "RobotState"]
+
 
 def _vector(name: str, value: Array) -> Array:
-    array = np.asarray(value, dtype=np.float64)
-    if array.shape != (G1_DOF,):
-        raise ValueError(f"{name} must have shape ({G1_DOF},)")
-    if not np.isfinite(array).all():
-        raise ValueError(f"{name} must contain finite values")
-    return array.copy()
+    return finite_vector(name, value, G1_DOF)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,18 +52,3 @@ class RobotCommand:
             if not np.isfinite(value).all():
                 raise ValueError("neck_joint_position must contain finite values")
             object.__setattr__(self, "neck_joint_position", value.copy())
-
-
-@dataclass(frozen=True, slots=True)
-class RobotState:
-    timestamp: float
-    base_position: Array
-    base_quaternion: Array
-    base_linear_velocity: Array
-    base_angular_velocity: Array
-    joint_position: Array
-    joint_velocity: Array
-    joint_effort: Array
-    imu_quaternion: Array
-    imu_angular_velocity: Array
-    imu_linear_acceleration: Array
